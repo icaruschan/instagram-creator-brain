@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Dependencies
+node_modules/
+package-lock.json.backup
+
+# Trigger.dev & Build outputs
+.trigger/
+dist/
+build/
+.tmp/
+
+# Logs & Run dumps
+*.log
+run_*.txt
+run_*.log
+
+# System & Editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.tmp
+.idea/
+.vscode/

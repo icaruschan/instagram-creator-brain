@@ -1,0 +1,31 @@
+{
+  "name": "instagram-creator-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "tsc --noEmit && tsx scripts/test-instagram-brain-scoring.ts && tsx scripts/test-production-brief.ts",
+    "test:scoring": "tsx scripts/test-instagram-brain-scoring.ts",
+    "migrate:notion": "tsx scripts/migrate-instagram-creator-brain.ts",
+    "migrate:notion:dry": "tsx scripts/migrate-instagram-creator-brain.ts --dry-run",
+    "verify:notion": "tsx scripts/verify-instagram-creator-brain.ts",
+    "dev": "trigger dev",
+    "deploy": "trigger deploy"
+  },
+  "dependencies": {
+    "@google/genai": "^2.24.0",
+    "@notionhq/client": "^5.14.0",
+    "@trigger.dev/sdk": "4.6.4",
+    "apify-client": "^2.22.3",
+    "dotenv": "^17.3.1",
+    "openai": "^6.32.0",
+    "proxy-agent": "^6.5.0"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "4.6.4",
+    "@types/node": "^25.9.1",
+    "trigger.dev": "4.6.4",
+    "tsx": "^4.22.3",
+    "typescript": "^5.9.3"
+  }
+}
