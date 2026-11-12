@@ -142,7 +142,7 @@ export const COST_ESTIMATES_USD = {
   /**
    * Qwen3.8 Omni Flash via OpenRouter ($0.15/M input, $0.47/M output), one Reel attempt.
    * A 60-90s Reel at the provider's frame sampling + audio is roughly 20-50k input tokens
-   * (~$0.003-0.0075) plus ~2-6k output incl. reasoning (~$0.001-0.003). Padded to $0.015.
+   * (~$0.003-0.0075) plus output incl. uncapped reasoning (measured 1.9-7k tokens, ~$0.001-0.0035). Padded to $0.015.
    * The real figure comes from OpenRouter usage.cost and replaces this in the log.
    */
   openrouterVideoAnalysis: envNumber("IG_BRAIN_COST_OPENROUTER_VIDEO_ANALYSIS", 0.015),
@@ -168,16 +168,8 @@ export const INSTAGRAM_BRAIN_CONFIG = {
    * base64, because signed CDN links often refuse/expire for provider fetchers) or "url" (send the CDN link).
    */
   openrouterVideoSendMode: (process.env.VIDEO_ANALYSIS_SEND_MODE === "url" ? "url" : "data-url") as "url" | "data-url",
-  /**
-   * Thinking budget for the OpenRouter video model (OpenRouter `reasoning.max_tokens`, mapped to Qwen's
-   * thinking budget). Unbounded, Qwen Omni spent ~6k reasoning tokens / ~100s on a 3s test clip.
-   * 0 = reasoning off.
-   */
-  videoAnalysisReasoningMaxTokens: envNumber("VIDEO_ANALYSIS_REASONING_MAX_TOKENS", 1024),
   /** Largest video (MB, before base64) we will inline as a data URL. */
   maxInlineVideoMb: envNumber("VIDEO_ANALYSIS_MAX_INLINE_MB", 40),
-  /** Per-request timeout for the video-analysis model call (ms). */
-  videoAnalysisTimeoutMs: envNumber("VIDEO_ANALYSIS_TIMEOUT_MS", 120_000),
   /** Attempts per provider for transient errors (HTTP 429 / 503), with backoff. */
   videoAnalysisMaxAttempts: envNumber("VIDEO_ANALYSIS_MAX_ATTEMPTS", 3),
   reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 3),

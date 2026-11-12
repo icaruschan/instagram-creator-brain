@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import { INSTAGRAM_BRAIN_CONFIG } from "./config";
 import { estimateCost, type CostLedger } from "./cost";
 import { ANALYSIS_PROMPT, downloadVideoBytes, parseAnalysisJson, type GeminiReelAnalysis } from "./gemini";
-import { HttpStatusError, retryTransient, withTimeout } from "./retry";
+import { HttpStatusError, InvalidModelOutputError, retryOnInvalidOutput, retryTransient } from "./retry";
 
 dotenv.config({ override: true });
 
@@ -38,12 +38,7 @@ export function toDataUrl(bytes: Uint8Array, mime = sniffVideoMime(bytes)): stri
 }
 
 /** Chat Completions body for one Reel, per OpenRouter's video-input docs (`video_url` content part). */
-export function buildOpenRouterVideoRequest(
-  model: string,
-  videoUrlOrDataUrl: string,
-  context: string,
-  reasoningMaxTokens = INSTAGRAM_BRAIN_CONFIG.videoAnalysisReasoningMaxTokens,
-) {
+export function buildOpenRouterVideoRequest(model: string, videoUrlOrDataUrl: string, context: string) {
   return {
     model,
     messages: [
@@ -57,9 +52,7 @@ export function buildOpenRouterVideoRequest(
     ],
     response_format: { type: "json_object" },
     temperature: 0.2,
-    max_tokens: 8_000,
-    // Bound the thinking: unbounded it is slow (risking the timeout) and output-token heavy.
-    reasoning: reasoningMaxTokens > 0 ? { max_tokens: reasoningMaxTokens, exclude: true } : { enabled: false },
+    // No max_tokens and no reasoning budget (Fortune, 2026-11-12): output and thinking run to the model's own max.
     // OpenRouter returns usage.cost (USD) with this; it is what the cost log records.
     usage: { include: true },
   };
@@ -94,53 +87,53 @@ export async function analyzeReelVideoOpenRouter(
   }
   const body = JSON.stringify(buildOpenRouterVideoRequest(model, videoRef, buildAnalysisContext(input)));
 
-  const data: any = await retryTransient(async (attempt) => {
+  const callOnce = () => retryTransient(async (attempt) => {
     ledger?.ensure(estimate, `${label} attempt ${attempt}`);
     let reportedCost: number | null = null;
     let billedUnknown = true;
     try {
-      const result = await withTimeout(label, INSTAGRAM_BRAIN_CONFIG.videoAnalysisTimeoutMs, async (signal) => {
-        const response = await fetch(OPENROUTER_CHAT_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:3000",
-            "X-Title": "Instagram Creator Brain",
-          },
-          body,
-          signal,
-        });
-        const text = await response.text();
-        if (!response.ok) {
-          // OpenRouter does not bill requests it rejects with an HTTP error.
-          billedUnknown = false;
-          reportedCost = 0;
-          throw new HttpStatusError(`OpenRouter video analysis failed (${response.status}): ${text.slice(0, 500)}`, response.status, retryAfterSeconds(response));
-        }
-        const parsed = JSON.parse(text);
-        const cost = Number(parsed?.usage?.cost);
-        if (Number.isFinite(cost)) { reportedCost = cost; billedUnknown = false; }
-        // Upstream errors can arrive inside a 200 body.
-        if (parsed?.error) {
-          const code = Number(parsed.error.code) || 502;
-          throw new HttpStatusError(`OpenRouter video analysis error (${code}): ${String(parsed.error.message || "").slice(0, 500)}`, code);
-        }
-        return parsed;
+      // No request timeout (Fortune, 2026-11-12): the task's maxDuration is the only backstop.
+      const response = await fetch(OPENROUTER_CHAT_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "http://localhost:3000",
+          "X-Title": "Instagram Creator Brain",
+        },
+        body,
       });
-      return result;
+      const text = await response.text();
+      if (!response.ok) {
+        // OpenRouter does not bill requests it rejects with an HTTP error.
+        billedUnknown = false;
+        reportedCost = 0;
+        throw new HttpStatusError(`OpenRouter video analysis failed (${response.status}): ${text.slice(0, 500)}`, response.status, retryAfterSeconds(response));
+      }
+      const parsed = JSON.parse(text);
+      const cost = Number(parsed?.usage?.cost);
+      if (Number.isFinite(cost)) { reportedCost = cost; billedUnknown = false; }
+      // Upstream errors can arrive inside a 200 body.
+      if (parsed?.error) {
+        const code = Number(parsed.error.code) || 502;
+        throw new HttpStatusError(`OpenRouter video analysis error (${code}): ${String(parsed.error.message || "").slice(0, 500)}`, code);
+      }
+      return parsed;
     } finally {
       ledger?.record("openrouter-video-analysis", `${label} attempt ${attempt}`, estimate, billedUnknown ? null : reportedCost);
     }
   }, { label, maxAttempts: INSTAGRAM_BRAIN_CONFIG.videoAnalysisMaxAttempts });
 
-  const content = data?.choices?.[0]?.message?.content;
-  const text = typeof content === "string"
-    ? content
-    : Array.isArray(content) ? content.map((part: any) => part?.text || "").join("") : "";
-  if (!text) throw new Error(`OpenRouter video analysis returned no text (finish_reason: ${data?.choices?.[0]?.finish_reason || "unknown"})`);
-  const usage = data?.usage || {};
-  console.log(`[video-analysis] ${JSON.stringify({ provider: "openrouter", model: data?.model || model, upstream: data?.provider, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, reasoningTokens: usage.completion_tokens_details?.reasoning_tokens, costUsd: usage.cost })}`);
-  return parseAnalysisJson(text, "OpenRouter");
+  // One extra call if the model answers with empty or non-JSON output.
+  return retryOnInvalidOutput(label, async () => {
+    const data: any = await callOnce();
+    const usage = data?.usage || {};
+    console.log(`[video-analysis] ${JSON.stringify({ provider: "openrouter", model: data?.model || model, upstream: data?.provider, promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, reasoningTokens: usage.completion_tokens_details?.reasoning_tokens, finishReason: data?.choices?.[0]?.finish_reason, costUsd: usage.cost })}`);
+    const content = data?.choices?.[0]?.message?.content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content) ? content.map((part: any) => part?.text || "").join("") : "";
+    if (!text.trim()) throw new InvalidModelOutputError(`OpenRouter video analysis returned no text (finish_reason: ${data?.choices?.[0]?.finish_reason || "unknown"})`);
+    return parseAnalysisJson(text, "OpenRouter");
+  });
 }
-

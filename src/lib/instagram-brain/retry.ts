@@ -7,6 +7,29 @@ export class RequestTimeoutError extends Error {
   }
 }
 
+/** The model answered, but with empty or non-JSON output. Retried once (see retryOnInvalidOutput). */
+export class InvalidModelOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidModelOutputError";
+  }
+}
+
+export function isInvalidOutput(error: unknown): boolean {
+  return error instanceof InvalidModelOutputError || (error as Error | undefined)?.name === "InvalidModelOutputError";
+}
+
+/** Run once more if the model returned empty or non-JSON output (one extra attempt, no backoff). */
+export async function retryOnInvalidOutput<T>(label: string, run: (attempt: number) => Promise<T>): Promise<T> {
+  try {
+    return await run(1);
+  } catch (error) {
+    if (!isInvalidOutput(error)) throw error;
+    console.warn(`${label}: ${(error as Error).message}; retrying once`);
+    return run(2);
+  }
+}
+
 /** An HTTP error that carries the status code (and optional Retry-After seconds). */
 export class HttpStatusError extends Error {
   constructor(message: string, public readonly status: number, public readonly retryAfterSeconds?: number) {

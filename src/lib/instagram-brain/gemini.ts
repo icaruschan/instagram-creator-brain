@@ -5,7 +5,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { INSTAGRAM_BRAIN_CONFIG } from "./config";
 import { estimateCost, type CostLedger } from "./cost";
-import { retryTransient, statusOf, withTimeout } from "./retry";
+import { InvalidModelOutputError, retryOnInvalidOutput, retryTransient, statusOf } from "./retry";
 
 dotenv.config({ override: true });
 
@@ -69,8 +69,12 @@ JSON schema:
 export function parseAnalysisJson(text: string, provider = "Gemini"): GeminiReelAnalysis {
   const cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/```json/gi, "").replace(/```/g, "").trim();
   const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error(`${provider} visual analysis did not return JSON`);
-  return JSON.parse(match[0]) as GeminiReelAnalysis;
+  if (!match) throw new InvalidModelOutputError(`${provider} visual analysis did not return JSON`);
+  try {
+    return JSON.parse(match[0]) as GeminiReelAnalysis;
+  } catch (error) {
+    throw new InvalidModelOutputError(`${provider} visual analysis returned invalid JSON: ${(error as Error).message}`);
+  }
 }
 
 /** Download the Reel video from the Instagram CDN (60s timeout, 100MB cap). */
@@ -109,7 +113,7 @@ export async function analyzeReelVideoGemini(input: {
   const label = `gemini analysis ${input.shortcode}`;
   ledger?.ensure(estimate, label);
 
-  const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: INSTAGRAM_BRAIN_CONFIG.videoAnalysisTimeoutMs } });
+  const ai = new GoogleGenAI({ apiKey });
   const localPath = await downloadVideo(input.videoUrl, input.shortcode);
   let remoteName: string | undefined;
   try {
@@ -133,17 +137,17 @@ export async function analyzeReelVideoGemini(input: {
       input.transcript ? `SOURCE TRANSCRIPT:\n${input.transcript}` : "",
     ].filter(Boolean).join("\n\n");
 
-    const timeoutMs = INSTAGRAM_BRAIN_CONFIG.videoAnalysisTimeoutMs;
-    const interaction: any = await retryTransient(async (attempt) => {
+    // No request timeout (Fortune, 2026-11-12): the task's maxDuration is the only backstop.
+    const callOnce = () => retryTransient(async (attempt) => {
       ledger?.ensure(estimate, `${label} (attempt ${attempt})`);
       try {
-        const result = await withTimeout(label, timeoutMs, () => ai.interactions.create({
+        const result = await ai.interactions.create({
           model: INSTAGRAM_BRAIN_CONFIG.geminiModel,
           input: [
             { type: "video", uri: uploaded.uri, mime_type: uploaded.mimeType || "video/mp4", processing: "static" },
             { type: "text", text: context },
           ],
-        } as any));
+        } as any);
         // Gemini does not return a dollar cost; log the estimate for every completed analysis.
         ledger?.record("gemini-analysis", label, estimate, null);
         return result;
@@ -154,8 +158,12 @@ export async function analyzeReelVideoGemini(input: {
         throw error;
       }
     }, { label, maxAttempts: INSTAGRAM_BRAIN_CONFIG.videoAnalysisMaxAttempts });
-    const output = interaction.outputText || interaction.output_text || "";
-    return parseAnalysisJson(output, "Gemini");
+    return await retryOnInvalidOutput(label, async () => {
+      const interaction: any = await callOnce();
+      const output = interaction.outputText || interaction.output_text || "";
+      if (!output.trim()) throw new InvalidModelOutputError("Gemini visual analysis returned empty output");
+      return parseAnalysisJson(output, "Gemini");
+    });
   } finally {
     await unlink(localPath).catch(() => undefined);
     if (remoteName) await ai.files.delete({ name: remoteName }).catch(() => undefined);
