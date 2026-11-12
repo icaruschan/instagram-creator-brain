@@ -175,6 +175,11 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 3),
   creatorsPerScan: envNumber("IG_BRAIN_CREATORS_PER_SCAN", 5),
   deepAnalysisLimitPerRun: envNumber("IG_BRAIN_DEEP_ANALYSIS_LIMIT", 5),
+  /**
+   * Only Reels published within this many days can become new candidates (scored, fit-checked, analysed).
+   * Pinned Reels and Reels with no publish date are always skipped as candidates. Default 14 (Fortune, Nov 12).
+   */
+  recentWindowDays: envNumber("IG_BRAIN_RECENT_WINDOW_DAYS", 14),
   /** Apify reel scraper: exclude Instagram Trial Reels (they pollute baselines and create "duplicates"). */
   skipTrialReels: envBool("IG_BRAIN_SKIP_TRIAL_REELS", true),
   /**

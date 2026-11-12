@@ -15,6 +15,15 @@ import {
   updateReelScore,
 } from "../../lib/instagram-brain/notion";
 import { calculatePerformanceScore, engagementRate, median } from "../../lib/instagram-brain/scoring";
+import {
+  candidateSkipReason,
+  expectedViewsAtAge,
+  expectedViewsPerHourAtAge,
+  fitAgeCurve,
+  fitVelocityCurve,
+  reelAgeDays,
+  type AgeCurve,
+} from "../../lib/instagram-brain/recency";
 import { runQualifyInstagramReel } from "./qualify-reel";
 
 export interface ScanInstagramPayload {
@@ -27,6 +36,8 @@ export interface ScanInstagramPayload {
   minPerformanceScore?: number;
   /** Override how many video analyses this run may queue. Defaults to IG_BRAIN_DEEP_ANALYSIS_LIMIT / 5. */
   analysisLimit?: number;
+  /** Override the recent window (days) for new candidates. Defaults to IG_BRAIN_RECENT_WINDOW_DAYS / 14. */
+  recentWindowDays?: number;
 }
 
 /** Estimated cost of one queued video analysis task (video analysis + one Jev value call). */
@@ -46,6 +57,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   const reelsPerCreator = payload.reelsPerCreator ?? INSTAGRAM_BRAIN_CONFIG.reelsPerCreator;
   const minPerformanceScore = payload.minPerformanceScore ?? INSTAGRAM_BRAIN_CONFIG.minPerformanceScoreForAnalysis;
   const analysisLimit = payload.analysisLimit ?? INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
+  const windowDays = payload.recentWindowDays ?? INSTAGRAM_BRAIN_CONFIG.recentWindowDays;
   const perAnalysis = estimatedAnalysisCost();
   const perCreator = estimatedCreatorScanCost(reelsPerCreator);
   // Hold back money for the video analyses this scan may queue, so scraping can't eat all of it.
@@ -58,6 +70,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
     : await getActiveInstagramCreators(payload.creatorLimit ?? INSTAGRAM_BRAIN_CONFIG.creatorsPerScan);
   const results: Array<Record<string, unknown>> = [];
   const candidates: Array<{ reelPageId: string; performanceScore: number; fitScore: number }> = [];
+  const recencyTotals = { windowDays, skippedPinned: 0, skippedTooOld: 0, skippedNoDate: 0 };
   for (const creator of creators) {
     if (stoppedReason) {
       results.push({ creator: creator.handle, status: "skipped", reason: stoppedReason });
@@ -75,6 +88,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
         reelsPerCreator,
         existingUrls,
         ledger,
+        { windowDays },
       );
       const newPageIds = new Set<string>();
       const velocityByReel = new Map<string, number>();
@@ -115,22 +129,61 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
             velocityByReel.set(stored.pageId, Math.max(0, stored.metrics.views - previous.views) / hours);
           }
         }
-        if (!knownUrls.has(reel.url) && selectedByUrl.has(reel.url) && stored.metricsTrusted) newPageIds.add(stored.pageId);
+        const isNewCandidate = !knownUrls.has(reel.url) && selectedByUrl.has(reel.url) && stored.metricsTrusted
+          && candidateSkipReason({ pinned: reel.isPinned, publishedAt: reel.timestamp }, windowDays) === null;
+        if (isNewCandidate) newPageIds.add(stored.pageId);
       }
 
       const allReels = await getCreatorReels(creator.pageId);
       const baselinePool = allReels.filter((reel) => !reel.pinned && reel.metrics.views > 0);
       const medianViews = median(baselinePool.map((reel) => reel.metrics.views));
       const medianEngagementRate = median(baselinePool.map((reel) => engagementRate(reel.metrics)));
-      const positiveVelocities = [...velocityByReel.values()].filter((value) => value > 0);
-      const medianViewsPerHour = positiveVelocities.length >= 3 ? median(positiveVelocities) : null;
+
+      // Age-fair baseline (see lib/instagram-brain/recency.ts): fit views-vs-age on this scrape's unpinned,
+      // dated Reels (all measured right now). Too few → plain median of the stored unpinned Reels.
+      const scoredAt = new Date();
+      const scrapePoints = scan.all
+        .filter((reel) => !reel.isPinned)
+        .map((reel) => ({ views: reel.videoPlayCount || reel.videoViewCount, ageDays: reelAgeDays(reel.timestamp, scoredAt) }))
+        .filter((point): point is { views: number; ageDays: number } => point.ageDays != null && point.views > 0);
+      let ageCurve: AgeCurve | null = fitAgeCurve(scrapePoints);
+      if ((!ageCurve || ageCurve.points < 5) && medianViews > 0) {
+        ageCurve = { logLevel: Math.log(medianViews), exponent: 0, points: baselinePool.length, method: "plain-median" };
+      }
+      const velocityCurve = ageCurve
+        ? fitVelocityCurve(
+          allReels
+            .filter((reel) => !reel.pinned && velocityByReel.has(reel.pageId))
+            .map((reel) => ({ viewsPerHour: velocityByReel.get(reel.pageId)!, ageDays: reelAgeDays(reel.publishedAt, scoredAt) ?? NaN })),
+          ageCurve,
+        )
+        : null;
+      const ageCurveSummary = ageCurve
+        ? { method: ageCurve.method, growthExponent: Math.round(ageCurve.exponent * 100) / 100, points: ageCurve.points,
+          expectedViewsAt1d: Math.round(expectedViewsAtAge(ageCurve, 1)), expectedViewsAt7d: Math.round(expectedViewsAtAge(ageCurve, 7)),
+          expectedViewsAt14d: Math.round(expectedViewsAtAge(ageCurve, 14)), velocityPoints: velocityCurve?.points ?? 0 }
+        : null;
+      console.log(`[age-curve] ${JSON.stringify({ creator: creator.handle, ...ageCurveSummary })}`);
+
+      // Only (re)score Reels refreshed in this scrape that are unpinned and inside the recent window.
+      // Pinned / old / undated Reels keep whatever score they had (we don't rewrite existing rows here).
+      const notRescored = { pinned: 0, tooOld: 0, noDate: 0 };
       for (const reel of allReels) {
+        if (!ageCurve || !reelsByUrl.has(reel.url)) continue;
+        const skip = candidateSkipReason(reel, windowDays, scoredAt);
+        if (skip) {
+          if (skip === "pinned") notRescored.pinned++;
+          else if (skip === "too-old") notRescored.tooOld++;
+          else notRescored.noDate++;
+          continue;
+        }
+        const ageDays = reelAgeDays(reel.publishedAt, scoredAt)!;
         const score = calculatePerformanceScore({
           reel: reel.metrics,
-          medianViews,
+          medianViews: expectedViewsAtAge(ageCurve, ageDays),
           medianEngagementRate,
           currentViewsPerHour: velocityByReel.get(reel.pageId),
-          medianViewsPerHour,
+          medianViewsPerHour: velocityCurve ? expectedViewsPerHourAtAge(velocityCurve, ageDays) : null,
         });
         await updateReelScore(reel.pageId, score);
       }
@@ -146,7 +199,19 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
           candidates.push({ reelPageId, performanceScore: stored.performanceScore, fitScore: qualification.score });
         }
       }
-      results.push({ creator: creator.handle, newReels: newPageIds.size, baselineReels: reelsByUrl.size, trialReels: scan.trialReels, status: "ok" });
+      recencyTotals.skippedPinned += scan.recency.skippedPinned;
+      recencyTotals.skippedTooOld += scan.recency.skippedTooOld;
+      recencyTotals.skippedNoDate += scan.recency.skippedNoDate;
+      results.push({
+        creator: creator.handle,
+        newReels: newPageIds.size,
+        baselineReels: reelsByUrl.size,
+        trialReels: scan.trialReels,
+        recency: scan.recency,
+        notRescored,
+        ageCurve: ageCurveSummary,
+        status: "ok",
+      });
     } catch (error) {
       if (isBudgetExceeded(error)) {
         stoppedReason = error.message;
@@ -181,11 +246,13 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   const cost = ledger.summary();
   await publishCostSummary(ledger);
   console.log(`[cost] scan summary ${JSON.stringify(cost)}`);
+  console.log(`[recency] scan totals ${JSON.stringify(recencyTotals)}`);
   return {
     creators: creators.length,
     results,
     visualAnalysesQueued: queued.length,
     analysisCutoff: { minPerformanceScore, candidates: candidates.length, belowCutoff },
+    recency: recencyTotals,
     stoppedReason,
     cost,
   };

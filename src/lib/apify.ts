@@ -2,6 +2,7 @@ import { ApifyClient } from "apify-client";
 import dotenv from "dotenv";
 import { INSTAGRAM_BRAIN_CONFIG } from "./instagram-brain/config";
 import { estimateCost, isBudgetExceeded, type CostLedger } from "./instagram-brain/cost";
+import { filterRecentCandidates, type RecencyCounts } from "./instagram-brain/recency";
 
 dotenv.config({ override: true });
 
@@ -40,7 +41,11 @@ export interface TrialReelReport {
 export interface InstagramReelScan {
   recent: InstagramReel[];
   selected: InstagramReel[];
+  /** Every scraped Reel (same capture moment), used for the age-fair baseline. No transcripts. */
+  all: InstagramReel[];
   trialReels: TrialReelReport;
+  /** Unseen Reels skipped as candidates: pinned, too old for the recent window, or no publish date. */
+  recency: RecencyCounts & { windowDays: number };
 }
 
 export function isFlaggedTrialReel(item: any): boolean {
@@ -90,6 +95,7 @@ export async function scrapeInstagramReels(
   resultsLimit = 3,
   excludeUrls: string[] = [],
   ledger?: CostLedger,
+  options: { windowDays?: number; now?: Date } = {},
 ): Promise<InstagramReelScan> {
   const handle = cleanHandle(username);
   const scrapeLimit = reelScrapeResultsLimit(resultsLimit);
@@ -121,7 +127,18 @@ export async function scrapeInstagramReels(
     // Belt and braces: drop anything the actor still flags as a trial reel.
     .filter((item) => !(skip && isFlaggedTrialReel(item)))
     .sort((a, b) => Date.parse(String(b.timestamp || b.createdAt || "")) - Date.parse(String(a.timestamp || a.createdAt || "")));
-  const unseen = chronological.filter((item) => !excludeUrls.includes(item.url));
+  const unseenAll = chronological.filter((item) => !excludeUrls.includes(item.url));
+  // Recency filter: pinned, undated and older-than-window Reels never become candidates (and we don't pay
+  // for their transcripts). They can still be stored as baseline rows below.
+  const windowDays = options.windowDays ?? INSTAGRAM_BRAIN_CONFIG.recentWindowDays;
+  const { eligible: unseen, counts } = filterRecentCandidates(
+    unseenAll,
+    (item) => ({ pinned: Boolean(item.isPinned || item.pinned), publishedAt: item.timestamp || item.createdAt }),
+    windowDays,
+    options.now,
+  );
+  const recency = { windowDays, ...counts };
+  console.log(`[recency] ${JSON.stringify({ creator: handle, unseen: unseenAll.length, ...recency })}`);
   const newestCount = Math.ceil(resultsLimit / 2);
   const newest = unseen.slice(0, newestCount);
   const top = unseen.slice(newestCount)
@@ -180,6 +197,8 @@ export async function scrapeInstagramReels(
   return {
     recent: chronological.slice(0, 12).map(normalize),
     selected: selected.map(normalize),
+    all: chronological.map(normalize),
     trialReels,
+    recency,
   };
 }
