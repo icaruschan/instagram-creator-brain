@@ -75,6 +75,18 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
+export type VideoProvider = "openrouter" | "gemini";
+
+function videoProvider(name: string, fallback: VideoProvider): VideoProvider;
+function videoProvider(name: string, fallback: "none"): VideoProvider | "none";
+function videoProvider(name: string, fallback: VideoProvider | "none"): VideoProvider | "none" {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw === "openrouter" || raw === "gemini") return raw;
+  if (fallback === "none" && (raw === "none" || raw === "off")) return "none";
+  throw new Error(`${name} must be "openrouter" or "gemini"${fallback === "none" ? ' or "none"' : ""} (got "${raw}")`);
+}
+
 function envBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.trim().toLowerCase();
   if (!raw) return fallback;
@@ -127,6 +139,13 @@ export const COST_ESTIMATES_USD = {
   jevCall: envNumber("IG_BRAIN_COST_JEV_CALL", 0.001),
   /** Gemini Flash video analysis of one Reel (~60s video ≈ 18k input tokens + ~2k output), padded ~2x. */
   geminiAnalysis: envNumber("IG_BRAIN_COST_GEMINI_ANALYSIS", 0.03),
+  /**
+   * Qwen3.8 Omni Flash via OpenRouter ($0.15/M input, $0.47/M output), one Reel attempt.
+   * A 60-90s Reel at the provider's frame sampling + audio is roughly 20-50k input tokens
+   * (~$0.003-0.0075) plus ~2-6k output incl. reasoning (~$0.001-0.003). Padded to $0.015.
+   * The real figure comes from OpenRouter usage.cost and replaces this in the log.
+   */
+  openrouterVideoAnalysis: envNumber("IG_BRAIN_COST_OPENROUTER_VIDEO_ANALYSIS", 0.015),
   /** MiniMax M3 via OpenRouter, one JSON generation call (angles / script / blueprint). */
   minimaxCall: envNumber("IG_BRAIN_COST_MINIMAX_CALL", 0.03),
 } as const;
@@ -135,6 +154,32 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   jevModel: process.env.IG_BRAIN_JEV_MODEL || "typesafe/jev-1.13",
   minimaxModel: process.env.IG_BRAIN_MINIMAX_MODEL || "minimax/minimax-m3",
   geminiModel: process.env.IG_BRAIN_GEMINI_MODEL || "gemini-3.8-flash",
+  /** Who analyses Reel videos: "openrouter" (default, Qwen Omni) or "gemini" (native Gemini API). */
+  videoAnalysisProvider: videoProvider("VIDEO_ANALYSIS_PROVIDER", "openrouter"),
+  /**
+   * Optional second provider tried once when the first fails for good ("gemini" | "openrouter" | "none").
+   * Default "none" so one Reel never pays two providers without someone choosing that.
+   */
+  videoAnalysisFallback: videoProvider("VIDEO_ANALYSIS_FALLBACK", "none"),
+  /** OpenRouter video model. qwen/qwen3.8-omni-flash: text+image+audio+video in, 1M context. */
+  openrouterVideoModel: process.env.VIDEO_ANALYSIS_OPENROUTER_MODEL || "qwen/qwen3.8-omni-flash",
+  /**
+   * How the video reaches OpenRouter: "data-url" (default; we download the Instagram CDN file and send
+   * base64, because signed CDN links often refuse/expire for provider fetchers) or "url" (send the CDN link).
+   */
+  openrouterVideoSendMode: (process.env.VIDEO_ANALYSIS_SEND_MODE === "url" ? "url" : "data-url") as "url" | "data-url",
+  /**
+   * Thinking budget for the OpenRouter video model (OpenRouter `reasoning.max_tokens`, mapped to Qwen's
+   * thinking budget). Unbounded, Qwen Omni spent ~6k reasoning tokens / ~100s on a 3s test clip.
+   * 0 = reasoning off.
+   */
+  videoAnalysisReasoningMaxTokens: envNumber("VIDEO_ANALYSIS_REASONING_MAX_TOKENS", 1024),
+  /** Largest video (MB, before base64) we will inline as a data URL. */
+  maxInlineVideoMb: envNumber("VIDEO_ANALYSIS_MAX_INLINE_MB", 40),
+  /** Per-request timeout for the video-analysis model call (ms). */
+  videoAnalysisTimeoutMs: envNumber("VIDEO_ANALYSIS_TIMEOUT_MS", 120_000),
+  /** Attempts per provider for transient errors (HTTP 429 / 503), with backoff. */
+  videoAnalysisMaxAttempts: envNumber("VIDEO_ANALYSIS_MAX_ATTEMPTS", 3),
   reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 3),
   creatorsPerScan: envNumber("IG_BRAIN_CREATORS_PER_SCAN", 5),
   deepAnalysisLimitPerRun: envNumber("IG_BRAIN_DEEP_ANALYSIS_LIMIT", 5),

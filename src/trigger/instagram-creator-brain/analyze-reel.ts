@@ -1,9 +1,9 @@
 import { task } from "@trigger.dev/sdk/v3";
-import { analyzeReelVideo } from "../../lib/instagram-brain/gemini";
+import { analyzeReelVideo } from "../../lib/instagram-brain/video-analysis";
 import { buildSourceValueQuestions, runJevDecision } from "../../lib/instagram-brain/jev";
 import { calculatePriorityScore } from "../../lib/instagram-brain/scoring";
-import { getInstagramCreator, getReel, updateReelIntelligence } from "../../lib/instagram-brain/notion";
-import { actionLedger, publishCostSummary } from "../../lib/instagram-brain/cost";
+import { clearReelFailedState, getInstagramCreator, getReel, setReelActionState, updateReelIntelligence } from "../../lib/instagram-brain/notion";
+import { actionLedger, publishCostSummary, rethrowNonRetryable } from "../../lib/instagram-brain/cost";
 
 export interface AnalyzeReelPayload { reelPageId: string }
 
@@ -17,16 +17,31 @@ export const analyzeInstagramReel = task({
   id: "instagram-brain-analyze-reel",
   maxDuration: 900,
   retry: { maxAttempts: 2 },
+  /** Runs once, after the last attempt fails: put the reason on the Reel so it isn't a silent failure. */
+  onFailure: async ({ payload, error }) => {
+    const message = `Video analysis failed: ${(error as Error)?.message || String(error)}`.slice(0, 1_900);
+    await setReelActionState(payload.reelPageId, "Failed", message).catch((notionError) => {
+      console.error(`Could not write Last Error to ${payload.reelPageId}: ${(notionError as Error).message}`);
+    });
+  },
   run: async ({ reelPageId }: AnalyzeReelPayload) => {
     const ledger = actionLedger("analyze-reel");
     const reel = await getReel(reelPageId);
     const creator = await getInstagramCreator(reel.creatorPageId);
-    const visual = await analyzeReelVideo({
-      shortcode: reel.shortcode,
-      videoUrl: reel.videoUrl,
-      caption: reel.caption,
-      transcript: reel.transcript,
-    }, ledger);
+    let analysisResult;
+    try {
+      analysisResult = await analyzeReelVideo({
+        shortcode: reel.shortcode,
+        videoUrl: reel.videoUrl,
+        caption: reel.caption,
+        transcript: reel.transcript,
+      }, ledger);
+    } catch (error) {
+      await publishCostSummary(ledger);
+      await rethrowNonRetryable(error);
+      throw error;
+    }
+    const visual = analysisResult.analysis;
     const recordId = reel.shortcode.replace(/[^a-z0-9]/gi, "_");
     const state = {
       description: "One candidate Instagram Reel for an AI Creative source system.",
@@ -71,8 +86,9 @@ export const analyzeInstagramReel = task({
       jevConfidence: Number(fitAnswer.confidence || 0),
       priorityScore: priority.priorityScore,
     });
+    await clearReelFailedState(reelPageId);
     await publishCostSummary(ledger);
-    return { reelPageId, priorityScore: priority.priorityScore, visualValue, workflowValue, cost: ledger.summary() };
+    return { reelPageId, analysisProvider: analysisResult.provider, analysisModel: analysisResult.model, priorityScore: priority.priorityScore, visualValue, workflowValue, cost: ledger.summary() };
   },
 });
 

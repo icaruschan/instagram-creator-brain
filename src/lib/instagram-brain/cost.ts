@@ -7,6 +7,7 @@ export type CostKind =
   | "apify-transcript"
   | "jev"
   | "gemini-analysis"
+  | "openrouter-video-analysis"
   | "minimax";
 
 export interface CostEntry {
@@ -48,8 +49,25 @@ export function estimateCost(kind: CostKind, units = 1): number {
     case "apify-transcript": return COST_ESTIMATES_USD.apifyTranscript * units;
     case "jev": return COST_ESTIMATES_USD.jevCall * units;
     case "gemini-analysis": return COST_ESTIMATES_USD.geminiAnalysis * units;
+    case "openrouter-video-analysis": return COST_ESTIMATES_USD.openrouterVideoAnalysis * units;
     case "minimax": return COST_ESTIMATES_USD.minimaxCall * units;
   }
+}
+
+/** Ledger kind for one video analysis by a provider. */
+export function videoAnalysisKind(provider: "openrouter" | "gemini"): CostKind {
+  return provider === "openrouter" ? "openrouter-video-analysis" : "gemini-analysis";
+}
+
+/**
+ * Estimate for analysing one Reel's video: one billed call to the primary provider (429/503 retries
+ * are rejected before inference and logged at $0), plus the fallback provider when one is configured.
+ * Used to reserve budget before queuing an analysis.
+ */
+export function estimateVideoAnalysisCost(): number {
+  const primary = estimateCost(videoAnalysisKind(INSTAGRAM_BRAIN_CONFIG.videoAnalysisProvider));
+  const fallback = INSTAGRAM_BRAIN_CONFIG.videoAnalysisFallback;
+  return round(primary + (fallback === "none" || fallback === INSTAGRAM_BRAIN_CONFIG.videoAnalysisProvider ? 0 : estimateCost(videoAnalysisKind(fallback))));
 }
 
 /**

@@ -4,8 +4,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "tsc --noEmit && tsx scripts/test-instagram-brain-scoring.ts && tsx scripts/test-production-brief.ts && tsx scripts/test-guardrails.ts",
-    "test:guardrails": "tsx scripts/test-guardrails.ts",
+    "test": "tsc --noEmit && tsx scripts/test-instagram-brain-scoring.ts && tsx scripts/test-production-brief.ts && tsx scripts/test-guardrails.ts && tsx scripts/test-video-analysis.ts",
+    "test:guardrails": "tsx scripts/test-guardrails.ts && tsx scripts/test-video-analysis.ts",
     "migrate:yuna-guardrails:plan": "tsx scripts/migrate-yuna-guardrails.ts --plan",
     "migrate:yuna-guardrails:dry": "tsx scripts/migrate-yuna-guardrails.ts",
     "migrate:yuna-guardrails": "tsx scripts/migrate-yuna-guardrails.ts --apply",

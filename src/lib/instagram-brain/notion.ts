@@ -506,6 +506,14 @@ export async function setReelActionState(
   await notion.pages.update({ page_id: pageId, properties });
 }
 
+/** After a successful re-analysis, put a Reel left in "Failed" back to "Idle" (other states untouched). */
+export async function clearReelFailedState(pageId: string): Promise<void> {
+  const page: any = await notion.pages.retrieve({ page_id: pageId });
+  if (page?.properties?.["Action State"]?.select?.name === "Failed") {
+    await notion.pages.update({ page_id: pageId, properties: { "Action State": { select: { name: "Idle" } } } });
+  }
+}
+
 export async function setReelDisposition(
   pageId: string,
   status: "Watchlist" | "Ignored",

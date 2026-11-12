@@ -1,6 +1,6 @@
 import { task, tasks } from "@trigger.dev/sdk/v3";
 import { reelScrapeResultsLimit, scrapeInstagramReels } from "../../lib/apify";
-import { CostLedger, estimateCost, isBudgetExceeded, publishCostSummary } from "../../lib/instagram-brain/cost";
+import { CostLedger, estimateCost, estimateVideoAnalysisCost, isBudgetExceeded, publishCostSummary } from "../../lib/instagram-brain/cost";
 import { INSTAGRAM_BRAIN_CONFIG } from "../../lib/instagram-brain/config";
 import {
   createOrUpdateReel,
@@ -23,15 +23,15 @@ export interface ScanInstagramPayload {
   reelsPerCreator?: number;
   /** Override the per-run spending cap (USD). Defaults to IG_BRAIN_SCAN_BUDGET_USD / $1.00. */
   budgetUsd?: number;
-  /** Override the Gemini cut-off (Performance Score 0-100). Defaults to IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS / 60. */
+  /** Override the video-analysis cut-off (Performance Score 0-100). Defaults to IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS / 60. */
   minPerformanceScore?: number;
-  /** Override how many Gemini analyses this run may queue. Defaults to IG_BRAIN_DEEP_ANALYSIS_LIMIT / 5. */
+  /** Override how many video analyses this run may queue. Defaults to IG_BRAIN_DEEP_ANALYSIS_LIMIT / 5. */
   analysisLimit?: number;
 }
 
-/** Estimated cost of one queued Gemini analysis task (video analysis + one Jev value call). */
+/** Estimated cost of one queued video analysis task (video analysis + one Jev value call). */
 export function estimatedAnalysisCost(): number {
-  return estimateCost("gemini-analysis") + estimateCost("jev");
+  return estimateVideoAnalysisCost() + estimateCost("jev");
 }
 
 /** Estimated worst-case cost of scanning one creator. */
@@ -48,9 +48,9 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   const analysisLimit = payload.analysisLimit ?? INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
   const perAnalysis = estimatedAnalysisCost();
   const perCreator = estimatedCreatorScanCost(reelsPerCreator);
-  // Hold back money for the Gemini analyses this scan may queue, so scraping can't eat all of it.
+  // Hold back money for the video analyses this scan may queue, so scraping can't eat all of it.
   const analysisHoldback = Math.min(analysisLimit, Math.floor(ledger.capUsd / perAnalysis)) * perAnalysis;
-  if (analysisHoldback > 0) ledger.reserve(analysisHoldback, "held back for queued Gemini analyses");
+  if (analysisHoldback > 0) ledger.reserve(analysisHoldback, "held back for queued video analyses");
   let stoppedReason: string | null = null;
 
   const creators = payload.creatorPageId
@@ -146,7 +146,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
           candidates.push({ reelPageId, performanceScore: stored.performanceScore, fitScore: qualification.score });
         }
       }
-      results.push({ creator: creator.handle, newReels: newPageIds.size, baselineReels: reelsByUrl.size, status: "ok" });
+      results.push({ creator: creator.handle, newReels: newPageIds.size, baselineReels: reelsByUrl.size, trialReels: scan.trialReels, status: "ok" });
     } catch (error) {
       if (isBudgetExceeded(error)) {
         stoppedReason = error.message;
@@ -171,10 +171,10 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   const queued: string[] = [];
   for (const candidate of ranked) {
     if (!ledger.canAfford(perAnalysis)) {
-      stoppedReason = stoppedReason || `Spending cap: no budget left to queue more Gemini analyses`;
+      stoppedReason = stoppedReason || `Spending cap: no budget left to queue more video analyses`;
       break;
     }
-    ledger.reserve(perAnalysis, `queued gemini analysis ${candidate.reelPageId}`);
+    ledger.reserve(perAnalysis, `queued video analysis ${candidate.reelPageId}`);
     await tasks.trigger("instagram-brain-analyze-reel", { reelPageId: candidate.reelPageId });
     queued.push(candidate.reelPageId);
   }

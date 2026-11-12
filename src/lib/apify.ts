@@ -22,9 +22,29 @@ export interface InstagramReel {
   isPinned: boolean;
 }
 
+export interface TrialReelReport {
+  /** skipTrialReels was sent to the actor. */
+  skipRequested: boolean;
+  /** Results the actor returned (after its own Trial Reel filtering). */
+  resultsReturned: number;
+  /** Items our backstop dropped because they still carried a trial flag (normally 0). */
+  droppedLocally: number;
+  /**
+   * The actor filters Trial Reels server-side and does not report how many it removed, and its output
+   * does not mark Trial Reels (per its README, the only way to count them is a second scrape without
+   * the filter and a diff, which doubles the scrape cost). So the skipped count is not available.
+   */
+  skippedByActor: null;
+}
+
 export interface InstagramReelScan {
   recent: InstagramReel[];
   selected: InstagramReel[];
+  trialReels: TrialReelReport;
+}
+
+export function isFlaggedTrialReel(item: any): boolean {
+  return item?.isTrialReel === true || item?.trialReel === true || item?.is_trial_reel === true || item?.productType === "trial_reel";
 }
 
 function tokens(): string[] {
@@ -92,10 +112,14 @@ export async function scrapeInstagramReels(
     return (items || []) as any[];
   });
 
+  const skip = INSTAGRAM_BRAIN_CONFIG.skipTrialReels;
+  const droppedLocally = skip ? metadata.filter(isFlaggedTrialReel).length : 0;
+  const trialReels: TrialReelReport = { skipRequested: skip, resultsReturned: metadata.length, droppedLocally, skippedByActor: null };
+  console.log(`[trial-reels] ${JSON.stringify({ creator: handle, ...trialReels })}`);
   const chronological = metadata
     .filter((item) => item.url)
     // Belt and braces: drop anything the actor still flags as a trial reel.
-    .filter((item) => !(INSTAGRAM_BRAIN_CONFIG.skipTrialReels && (item.isTrialReel === true || item.trialReel === true)))
+    .filter((item) => !(skip && isFlaggedTrialReel(item)))
     .sort((a, b) => Date.parse(String(b.timestamp || b.createdAt || "")) - Date.parse(String(a.timestamp || a.createdAt || "")));
   const unseen = chronological.filter((item) => !excludeUrls.includes(item.url));
   const newestCount = Math.ceil(resultsLimit / 2);
@@ -156,5 +180,6 @@ export async function scrapeInstagramReels(
   return {
     recent: chronological.slice(0, 12).map(normalize),
     selected: selected.map(normalize),
+    trialReels,
   };
 }
