@@ -172,7 +172,20 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   maxInlineVideoMb: envNumber("VIDEO_ANALYSIS_MAX_INLINE_MB", 40),
   /** Attempts per provider for transient errors (HTTP 429 / 503), with backoff. */
   videoAnalysisMaxAttempts: envNumber("VIDEO_ANALYSIS_MAX_ATTEMPTS", 3),
-  reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 3),
+  /**
+   * Candidate slots per creator per scan (fit check, then the analysis gate). Shared between new Reels and
+   * rechecks of existing rows; see lib/instagram-brain/candidates.ts. Default 8 (Fortune, Nov 12).
+   */
+  reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 8),
+  /**
+   * Shortcodes removed by hand (trashed in Notion). The Notion API can't see trashed rows, so without this a
+   * trashed Reel would come back as "unseen" on the next scrape. Extra codes: IG_BRAIN_BLOCKED_SHORTCODES (comma list).
+   */
+  blockedShortcodes: [
+    "DaEbLcHhEe8", // Kaye, pinned Spider-Verse Reel (Jun 27), trashed Nov 12
+    "DarI4g8hBMc", // Kaye, Fantasy World portal Reel (Jul 12), trashed Nov 12
+    ...String(process.env.IG_BRAIN_BLOCKED_SHORTCODES || "").split(",").map((code) => code.trim()).filter(Boolean),
+  ] as string[],
   creatorsPerScan: envNumber("IG_BRAIN_CREATORS_PER_SCAN", 5),
   deepAnalysisLimitPerRun: envNumber("IG_BRAIN_DEEP_ANALYSIS_LIMIT", 5),
   /**

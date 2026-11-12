@@ -39,13 +39,15 @@ export interface TrialReelReport {
 }
 
 export interface InstagramReelScan {
-  recent: InstagramReel[];
-  selected: InstagramReel[];
-  /** Every scraped Reel (same capture moment), used for the age-fair baseline. No transcripts. */
+  /** Every scraped Reel, newest first, all measured at the same moment. No transcripts yet. */
   all: InstagramReel[];
+  /** The 12 newest scraped Reels (kept as baseline rows). */
+  recent: InstagramReel[];
+  /** Unseen Reels that may become new candidates (unpinned, dated, inside the window, not blocked), newest first. */
+  unseenEligible: InstagramReel[];
   trialReels: TrialReelReport;
-  /** Unseen Reels skipped as candidates: pinned, too old for the recent window, or no publish date. */
-  recency: RecencyCounts & { windowDays: number };
+  /** Unseen Reels skipped as candidates: pinned, too old for the recent window, no publish date, or blocked. */
+  recency: RecencyCounts & { windowDays: number; unseen: number; skippedBlocked: number };
 }
 
 export function isFlaggedTrialReel(item: any): boolean {
@@ -90,15 +92,39 @@ export function reelScrapeResultsLimit(resultsLimit: number): number {
   return Math.max(30, resultsLimit * 2);
 }
 
+function normalizeReel(item: any, handle: string): InstagramReel {
+  return {
+    id: shortcode(item),
+    caption: String(item.caption || "").slice(0, 2_000),
+    url: String(item.url || ""),
+    transcript: "",
+    likesCount: Number(item.likesCount || item.likeCount || 0),
+    commentsCount: Number(item.commentsCount || item.commentCount || 0),
+    videoViewCount: Number(item.videoViewCount || item.videoPlayCount || item.viewCount || 0),
+    videoPlayCount: Number(item.videoPlayCount || item.videoViewCount || item.playCount || 0),
+    videoDuration: Number(item.videoDuration || 0),
+    timestamp: String(item.timestamp || item.createdAt || ""),
+    ownerUsername: String(item.ownerUsername || item.owner?.username || handle),
+    videoUrl: String(item.videoUrl || item.video_url || ""),
+    coverUrl: String(item.displayUrl || item.thumbnailUrl || item.coverUrl || ""),
+    isPinned: Boolean(item.isPinned || item.pinned),
+  };
+}
+
+/**
+ * One metadata scrape per creator (no transcripts; those are fetched only for the Reels that win a
+ * candidate slot, see fetchReelTranscripts). `blockedShortcodes` = Reels removed by hand (e.g. trashed
+ * in Notion, which the API can't see), never stored or surfaced again.
+ */
 export async function scrapeInstagramReels(
   username: string,
-  resultsLimit = 3,
+  candidateSlots = 8,
   excludeUrls: string[] = [],
   ledger?: CostLedger,
-  options: { windowDays?: number; now?: Date } = {},
+  options: { windowDays?: number; now?: Date; blockedShortcodes?: Iterable<string> } = {},
 ): Promise<InstagramReelScan> {
   const handle = cleanHandle(username);
-  const scrapeLimit = reelScrapeResultsLimit(resultsLimit);
+  const scrapeLimit = reelScrapeResultsLimit(candidateSlots);
   const scrapeEstimate = estimateCost("apify-reel-scrape", scrapeLimit);
   ledger?.ensure(scrapeEstimate, `reel scrape @${handle}`);
   const metadata = await withApify(async (client) => {
@@ -122,33 +148,37 @@ export async function scrapeInstagramReels(
   const droppedLocally = skip ? metadata.filter(isFlaggedTrialReel).length : 0;
   const trialReels: TrialReelReport = { skipRequested: skip, resultsReturned: metadata.length, droppedLocally, skippedByActor: null };
   console.log(`[trial-reels] ${JSON.stringify({ creator: handle, ...trialReels })}`);
+  const blocked = new Set(options.blockedShortcodes || []);
   const chronological = metadata
     .filter((item) => item.url)
     // Belt and braces: drop anything the actor still flags as a trial reel.
     .filter((item) => !(skip && isFlaggedTrialReel(item)))
-    .sort((a, b) => Date.parse(String(b.timestamp || b.createdAt || "")) - Date.parse(String(a.timestamp || a.createdAt || "")));
-  const unseenAll = chronological.filter((item) => !excludeUrls.includes(item.url));
-  // Recency filter: pinned, undated and older-than-window Reels never become candidates (and we don't pay
-  // for their transcripts). They can still be stored as baseline rows below.
+    .sort((a, b) => (Date.parse(String(b.timestamp || b.createdAt || "")) || 0) - (Date.parse(String(a.timestamp || a.createdAt || "")) || 0))
+    .map((item) => normalizeReel(item, handle));
+  const all = chronological.filter((reel) => !blocked.has(reel.id));
+  const unseenAll = chronological.filter((reel) => !excludeUrls.includes(reel.url));
+  const skippedBlocked = unseenAll.filter((reel) => blocked.has(reel.id)).length;
+  // Recency filter: pinned, undated and older-than-window Reels never become candidates.
   const windowDays = options.windowDays ?? INSTAGRAM_BRAIN_CONFIG.recentWindowDays;
-  const { eligible: unseen, counts } = filterRecentCandidates(
-    unseenAll,
-    (item) => ({ pinned: Boolean(item.isPinned || item.pinned), publishedAt: item.timestamp || item.createdAt }),
+  const { eligible, counts } = filterRecentCandidates(
+    unseenAll.filter((reel) => !blocked.has(reel.id)),
+    (reel) => ({ pinned: reel.isPinned, publishedAt: reel.timestamp }),
     windowDays,
     options.now,
   );
-  const recency = { windowDays, ...counts };
-  console.log(`[recency] ${JSON.stringify({ creator: handle, unseen: unseenAll.length, ...recency })}`);
-  const newestCount = Math.ceil(resultsLimit / 2);
-  const newest = unseen.slice(0, newestCount);
-  const top = unseen.slice(newestCount)
-    .sort((a, b) => Number(b.videoPlayCount || b.videoViewCount || 0) - Number(a.videoPlayCount || a.videoViewCount || 0))
-    .slice(0, resultsLimit - newestCount);
-  const selected = [...newest, ...top];
+  const recency = { windowDays, unseen: unseenAll.length, ...counts, skippedBlocked };
+  console.log(`[recency] ${JSON.stringify({ creator: handle, ...recency })}`);
+  return { all, recent: all.slice(0, 12), unseenEligible: eligible, trialReels, recency };
+}
 
+/** Transcripts for the Reels that won a candidate slot (3 at a time). Returns shortcode -> transcript. */
+export async function fetchReelTranscripts(
+  reels: Array<{ id: string; url: string }>,
+  ledger?: CostLedger,
+): Promise<Map<string, string>> {
   const transcripts = new Map<string, string>();
-  for (let index = 0; index < selected.length; index += 3) {
-    const batch = selected.slice(index, index + 3);
+  for (let index = 0; index < reels.length; index += 3) {
+    const batch = reels.slice(index, index + 3);
     await Promise.all(batch.map(async (item) => {
       if (!item.url) return;
       const transcriptEstimate = estimateCost("apify-transcript");
@@ -157,12 +187,11 @@ export async function scrapeInstagramReels(
         await withApify(async (client) => {
           const run: any = await client.actor("apple_yang/instagram-transcripts-scraper").call({ videoUrl: item.url });
           const reported = Number(run?.usageTotalUsd);
-          ledger?.record("apify-transcript", `transcript ${shortcode(item)}`, transcriptEstimate,
+          ledger?.record("apify-transcript", `transcript ${item.id}`, transcriptEstimate,
             Number.isFinite(reported) && reported > transcriptEstimate ? reported : null);
           const { items } = await client.dataset(run.defaultDatasetId).listItems();
           const transcript = (items?.[0] as any)?.text;
-          const code = (items?.[0] as any)?.code || shortcode(item);
-          if (code && transcript) transcripts.set(code, transcript);
+          if (transcript) transcripts.set(item.id, String(transcript).slice(0, 5_000));
         });
       } catch (error) {
         if (isBudgetExceeded(error)) {
@@ -172,33 +201,7 @@ export async function scrapeInstagramReels(
         console.warn(`Transcript unavailable for ${item.url}: ${(error as Error).message}`);
       }
     }));
-    if (index + 3 < selected.length) await new Promise((resolve) => setTimeout(resolve, 2_000));
+    if (index + 3 < reels.length) await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
-
-  const normalize = (item: any): InstagramReel => {
-    const code = shortcode(item);
-    return {
-      id: code,
-      caption: String(item.caption || "").slice(0, 2_000),
-      url: String(item.url || ""),
-      transcript: String(transcripts.get(code) || "").slice(0, 5_000),
-      likesCount: Number(item.likesCount || item.likeCount || 0),
-      commentsCount: Number(item.commentsCount || item.commentCount || 0),
-      videoViewCount: Number(item.videoViewCount || item.videoPlayCount || item.viewCount || 0),
-      videoPlayCount: Number(item.videoPlayCount || item.videoViewCount || item.playCount || 0),
-      videoDuration: Number(item.videoDuration || 0),
-      timestamp: String(item.timestamp || item.createdAt || ""),
-      ownerUsername: String(item.ownerUsername || item.owner?.username || handle),
-      videoUrl: String(item.videoUrl || item.video_url || ""),
-      coverUrl: String(item.displayUrl || item.thumbnailUrl || item.coverUrl || ""),
-      isPinned: Boolean(item.isPinned || item.pinned),
-    };
-  };
-  return {
-    recent: chronological.slice(0, 12).map(normalize),
-    selected: selected.map(normalize),
-    all: chronological.map(normalize),
-    trialReels,
-    recency,
-  };
+  return transcripts;
 }

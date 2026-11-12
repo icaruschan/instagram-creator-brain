@@ -30,10 +30,18 @@ async function main() {
   ledger.ensure(0.03, "fits again");
   assert.equal(ledger.summary().byKind.minimax, 0.03);
 
-  // Default scan fits under the default cap; a 20-creator scan does not.
+  // Cap stays $1 (raising it needs Fortune's approval). With 8 slots per creator the worst-case estimate is
+  // $0.246/creator: a 1-creator scan fits easily, a full 5-creator scan (~$1.31 worst case) does not, so the cap
+  // stops it cleanly after 3 creators (the 5 analyses are held back first).
+  assert.equal(INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, 1);
+  assert.equal(INSTAGRAM_BRAIN_CONFIG.reelsPerCreator, 8);
   const perCreator = estimatedCreatorScanCost(INSTAGRAM_BRAIN_CONFIG.reelsPerCreator);
-  const defaultScan = perCreator * INSTAGRAM_BRAIN_CONFIG.creatorsPerScan + estimatedAnalysisCost() * INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
-  assert.ok(defaultScan <= INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, `default scan ${defaultScan} should fit the cap`);
+  assert.equal(Math.round(perCreator * 1000) / 1000, 0.246);
+  const holdback = estimatedAnalysisCost() * INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
+  const defaultScan = perCreator * INSTAGRAM_BRAIN_CONFIG.creatorsPerScan + holdback;
+  assert.equal(Math.round(defaultScan * 100) / 100, 1.31);
+  assert.ok(perCreator + holdback <= INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, "a 1-creator scan should fit the cap");
+  assert.equal(Math.floor((INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd - holdback) / perCreator), 3, "cap covers 3 full creators");
   assert.ok(perCreator * 20 > INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, "a 20-creator scan should hit the cap");
   assert.equal(estimateCost("apify-reel-scrape", 30), 0.078);
   // Worst-case angle generation (3 MiniMax + 3 Jev) fits the per-action cap.
