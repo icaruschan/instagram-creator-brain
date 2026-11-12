@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { DeliveryProfile, ScriptEngine } from "./config";
+import { ACCOUNTS, PILLAR_DEFINITIONS, activeAccounts, type DeliveryProfile, type ScriptEngine } from "./config";
 
 function loadScriptWriterV23(): string {
   const candidates = [
@@ -17,8 +17,15 @@ function loadScriptWriterV23(): string {
   throw new Error("Bundled ScriptWriter V2.3 instructions were not found");
 }
 
+function targetAccountsLine(): string {
+  const active = activeAccounts();
+  const personas = active.map((name) => `- ${ACCOUNTS[name].persona}`).join("\n");
+  return `Target account${active.length === 1 ? "" : "s"}: ${active.join(", ") || "none"}.\n${personas}\nContent pillars:\n${Object.values(PILLAR_DEFINITIONS).map((value) => `- ${value}`).join("\n")}`;
+}
+
 export const ANGLE_STRATEGIST_SYSTEM = `You are the Instagram Creator Brain's MiniMax Angle Strategist.
-Turn one qualified source Reel into original content opportunities for Alisha, Yuna, or Both.
+Turn one qualified source Reel into original content opportunities for the target account below.
+${targetAccountsLine()}
 Study the transferable viewer psychology, never the creator's protected expression.
 Do not reuse characters, dialogue, distinctive phrasing, opening action, movement choreography, escalation sequence, or visual payoff. Changing the setting or costume while retaining the source sequence is copying.
 The three angles must use different core actions and narrative shapes from one another.
@@ -169,5 +176,48 @@ Return JSON:
   "decisionsNeeded": ["choice for the creator, if any"],
   "toolCandidates": [{"name":"optional candidate, not selected","reason":"why it may fit"}],
   "preflightChecklist": ["imperative check to perform after a first render exists"]
+}`;
+}
+
+export function buildReviseAnglePrompt(input: {
+  angle: Record<string, unknown>;
+  revisionNotes: string;
+  sourceTitle: string;
+  geminiAnalysis: string;
+  pillar?: string;
+  contentType?: string;
+  rejectedFeedback?: string;
+}): string {
+  return `Revise ONE existing Instagram Reel angle. Keep what works, fix what the reviewer asked for.
+
+REVIEWER NOTES (follow these; if empty, make the angle sharper, more original and more clearly AI-driven):
+${input.revisionNotes || "No notes given."}
+
+PILLAR: ${input.pillar || "unspecified"}
+CONTENT TYPE: ${input.contentType || "unspecified"}
+SOURCE: ${input.sourceTitle}
+
+CURRENT ANGLE:
+${JSON.stringify(input.angle, null, 2)}
+
+GROUNDED VISUAL ANALYSIS OF THE SOURCE (do not copy its opening action, movement sequence or payoff):
+${input.geminiAnalysis || "Not available."}
+
+${input.rejectedFeedback ? `YOUR PREVIOUS REVISION FAILED ORIGINALITY OR AI CREATIVE FIT:\n${input.rejectedFeedback}\n` : ""}
+Return JSON with exactly one angle in the same shape:
+{
+  "angles": [{
+    "title": "2-7 words",
+    "summary": "original premise",
+    "spokenHook": "...",
+    "textHook": "six words or fewer, or intentionally blank",
+    "visualHook": "exact original 0-3s action",
+    "audioHook": "music/SFX direction",
+    "threeBeatOutline": ["setup", "escalation", "payoff"],
+    "whyItWorks": "specific mechanism",
+    "whatNotToCopy": "protected or distinctive source elements to avoid",
+    "deliveryProfile": "Visual-first | Operator-first | Hybrid",
+    "scriptEngine": "Kallaway | RPN | Hybrid"
+  }]
 }`;
 }

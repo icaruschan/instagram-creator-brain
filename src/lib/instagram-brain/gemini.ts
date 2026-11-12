@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
 import { INSTAGRAM_BRAIN_CONFIG } from "./config";
+import { estimateCost, type CostLedger } from "./cost";
 
 dotenv.config({ override: true });
 
@@ -90,10 +91,13 @@ export async function analyzeReelVideo(input: {
   videoUrl: string;
   caption?: string;
   transcript?: string;
-}): Promise<GeminiReelAnalysis> {
+}, ledger?: CostLedger): Promise<GeminiReelAnalysis> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is required for visual Reel analysis");
   if (!input.videoUrl) throw new Error("A direct Reel video URL is required for Gemini analysis");
+  const estimate = estimateCost("gemini-analysis");
+  const label = `gemini analysis ${input.shortcode}`;
+  ledger?.ensure(estimate, label);
 
   const ai = new GoogleGenAI({ apiKey });
   const localPath = await downloadVideo(input.videoUrl, input.shortcode);
@@ -119,13 +123,19 @@ export async function analyzeReelVideo(input: {
       input.transcript ? `SOURCE TRANSCRIPT:\n${input.transcript}` : "",
     ].filter(Boolean).join("\n\n");
 
-    const interaction: any = await ai.interactions.create({
+    let interaction: any;
+    try {
+      interaction = await ai.interactions.create({
       model: INSTAGRAM_BRAIN_CONFIG.geminiModel,
       input: [
         { type: "video", uri: uploaded.uri, mime_type: uploaded.mimeType || "video/mp4", processing: "static" },
         { type: "text", text: context },
       ],
-    } as any);
+      } as any);
+    } finally {
+      // Gemini does not return a dollar cost; log the estimate for every attempted analysis.
+      ledger?.record("gemini-analysis", label, estimate, null);
+    }
     const output = interaction.outputText || interaction.output_text || "";
     return parseJson(output);
   } finally {

@@ -12,7 +12,7 @@ const REQUIRED: Record<string, { id: string; properties: string[] }> = {
   },
   "Reel Intelligence": {
     id: INSTAGRAM_BRAIN_NOTION_IDS.reelIntelligence.dataSourceId,
-    properties: ["Reel", "Creator", "URL", "Shortcode", "Snapshots", "Ideas", "Performance Score", "Strategic Fit Score", "Visual Pattern Value", "Workflow Value", "Priority Score", "Action Requested", "Action State"],
+    properties: ["Reel", "Creator", "URL", "Shortcode", "Snapshots", "Ideas", "Performance Score", "Strategic Fit Score", "Visual Pattern Value", "Workflow Value", "Priority Score", "Action Requested", "Action State", "Manual Override", "Pillar", "Content Type"],
   },
   "Reel Snapshots": {
     id: INSTAGRAM_BRAIN_NOTION_IDS.reelSnapshots.dataSourceId,
@@ -20,11 +20,11 @@ const REQUIRED: Record<string, { id: string; properties: string[] }> = {
   },
   "Idea Lab": {
     id: INSTAGRAM_BRAIN_NOTION_IDS.ideaLab.dataSourceId,
-    properties: ["Idea", "Source Reel", "Account", "Delivery Profile", "Script Engine", "Production Item", "Action Requested", "Action State"],
+    properties: ["Idea", "Source Reel", "Account", "Delivery Profile", "Script Engine", "Production Item", "Action Requested", "Action State", "Pillar", "Content Type", "Revision Notes"],
   },
   "Production Queue": {
     id: INSTAGRAM_BRAIN_NOTION_IDS.productionQueue.dataSourceId,
-    properties: ["Content Brief", "Idea", "Spoken Script", "Production Blueprint", "Production Risks", "Decisions Needed", "Complexity", "Complexity Reason", "Performance Records", "Action Requested", "Action State"],
+    properties: ["Content Brief", "Idea", "Spoken Script", "Production Blueprint", "Production Risks", "Decisions Needed", "Complexity", "Complexity Reason", "Performance Records", "Action Requested", "Action State", "Lara Script", "Lara Script Status", "Chosen Script", "Pillar", "Content Type"],
   },
   "Performance Log": {
     id: INSTAGRAM_BRAIN_NOTION_IDS.performanceLog.dataSourceId,

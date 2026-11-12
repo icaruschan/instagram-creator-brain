@@ -3,6 +3,7 @@ import { analyzeReelVideo } from "../../lib/instagram-brain/gemini";
 import { buildSourceValueQuestions, runJevDecision } from "../../lib/instagram-brain/jev";
 import { calculatePriorityScore } from "../../lib/instagram-brain/scoring";
 import { getInstagramCreator, getReel, updateReelIntelligence } from "../../lib/instagram-brain/notion";
+import { actionLedger, publishCostSummary } from "../../lib/instagram-brain/cost";
 
 export interface AnalyzeReelPayload { reelPageId: string }
 
@@ -17,6 +18,7 @@ export const analyzeInstagramReel = task({
   maxDuration: 900,
   retry: { maxAttempts: 2 },
   run: async ({ reelPageId }: AnalyzeReelPayload) => {
+    const ledger = actionLedger("analyze-reel");
     const reel = await getReel(reelPageId);
     const creator = await getInstagramCreator(reel.creatorPageId);
     const visual = await analyzeReelVideo({
@@ -24,7 +26,7 @@ export const analyzeInstagramReel = task({
       videoUrl: reel.videoUrl,
       caption: reel.caption,
       transcript: reel.transcript,
-    });
+    }, ledger);
     const recordId = reel.shortcode.replace(/[^a-z0-9]/gi, "_");
     const state = {
       description: "One candidate Instagram Reel for an AI Creative source system.",
@@ -37,7 +39,7 @@ export const analyzeInstagramReel = task({
         groundedVisualAnalysis: visual,
       }],
     };
-    const decisions = await runJevDecision(state, buildSourceValueQuestions(recordId));
+    const decisions = await runJevDecision(state, buildSourceValueQuestions(recordId), { ledger, label: `jev source value ${reel.shortcode}` });
     const fitAnswer = decisions.answers[`${recordId}__strategic_fit`];
     const visualAnswer = decisions.answers[`${recordId}__visual_pattern_value`];
     const workflowAnswer = decisions.answers[`${recordId}__workflow_value`];
@@ -69,7 +71,8 @@ export const analyzeInstagramReel = task({
       jevConfidence: Number(fitAnswer.confidence || 0),
       priorityScore: priority.priorityScore,
     });
-    return { reelPageId, priorityScore: priority.priorityScore, visualValue, workflowValue };
+    await publishCostSummary(ledger);
+    return { reelPageId, priorityScore: priority.priorityScore, visualValue, workflowValue, cost: ledger.summary() };
   },
 });
 

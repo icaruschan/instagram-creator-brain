@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import dotenv from "dotenv";
+import { estimateCost, type CostLedger } from "./instagram-brain/cost";
 
 dotenv.config({ override: true });
 
@@ -21,24 +22,45 @@ function parseJson(raw: string): Record<string, unknown> {
   return JSON.parse(match[0]) as Record<string, unknown>;
 }
 
+export interface MiniMaxCallOptions {
+  ledger?: CostLedger;
+  label?: string;
+  model?: string;
+}
+
 export async function generateJSONMiniMax(
   prompt: string,
   systemPrompt: string,
   temperature = 0.5,
-  model = process.env.IG_BRAIN_MINIMAX_MODEL || "minimax/minimax-m3",
+  options: MiniMaxCallOptions = {},
 ): Promise<Record<string, unknown>> {
+  const model = options.model || process.env.IG_BRAIN_MINIMAX_MODEL || "minimax/minimax-m3";
+  const label = options.label || "minimax call";
+  const estimate = estimateCost("minimax");
+  options.ledger?.ensure(estimate, label);
   const stream = await getClient().chat.completions.create({
     model,
     stream: true,
     temperature,
+    // OpenRouter: report token usage (and cost) in the final stream chunk.
+    stream_options: { include_usage: true },
+    usage: { include: true },
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },
     ],
-  });
+  } as any) as unknown as AsyncIterable<any>;
   let raw = "";
-  for await (const chunk of stream) {
-    raw += chunk.choices[0]?.delta?.content || "";
+  let reportedCost: number | null = null;
+  try {
+    for await (const chunk of stream) {
+      raw += chunk.choices?.[0]?.delta?.content || "";
+      const cost = Number(chunk?.usage?.cost);
+      if (Number.isFinite(cost)) reportedCost = cost;
+    }
+  } finally {
+    // Record even if the stream breaks part-way: the call was still (at least partly) billed.
+    options.ledger?.record("minimax", label, estimate, reportedCost);
   }
   return parseJson(raw);
 }

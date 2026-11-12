@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client";
 import dotenv from "dotenv";
-import { INSTAGRAM_BRAIN_PILLARS } from "../src/lib/instagram-brain/config";
+import { CONTENT_TYPES, INSTAGRAM_BRAIN_PILLARS, YUNA_PILLARS } from "../src/lib/instagram-brain/config";
 
 dotenv.config({ override: true });
 
@@ -117,6 +117,8 @@ const REEL_PROPERTIES: PropertyMap = {
   "Jev Confidence": number(),
   "Priority Score": number(),
   "Gemini Analysis": text(),
+  Pillar: select([...YUNA_PILLARS]),
+  "Content Type": select([...CONTENT_TYPES]),
   "Last Analyzed": date(),
   "Last Error": text(),
   Created: createdTime(),
@@ -153,6 +155,9 @@ const IDEA_PROPERTIES: PropertyMap = {
   "Three-Beat Outline": text(),
   "Why It Works": text(),
   "What Not To Copy": text(),
+  Pillar: select([...YUNA_PILLARS]),
+  "Content Type": select([...CONTENT_TYPES]),
+  "Revision Notes": text(),
   "Action Requested": select(["None", "Generate Script", "Revise Angle", "Park", "Reject"]),
   "Action State": select(["Idle", "Queued", "Processing", "Complete", "Failed"]),
   "Priority Score": number(),
@@ -180,6 +185,11 @@ const PRODUCTION_PROPERTIES: PropertyMap = {
   "Action Requested": select(["None", "Generate Script", "Generate Blueprint", "Mark Ready", "Mark Published"]),
   "Action State": select(["Idle", "Queued", "Processing", "Complete", "Failed"]),
   "Spoken Script": text(),
+  "Lara Script": text(),
+  "Lara Script Status": select(["Needed", "Drafted"]),
+  "Chosen Script": select(["Undecided", "AI V2.3", "Lara"]),
+  Pillar: select([...YUNA_PILLARS]),
+  "Content Type": select([...CONTENT_TYPES]),
   "Spoken Hook": text(),
   "Text Hook": text(),
   "Visual Hook": text(),
@@ -311,7 +321,7 @@ async function ensureRootPage(): Promise<string> {
       { object: "block", type: "divider", divider: {} },
       { object: "block", type: "heading_2", heading_2: { rich_text: rich("How to use this workspace") } },
       { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich("Reel Intelligence: review Top Outliers, Visual-first sources, Workflow-first sources, and Watchlist items.") } },
-      { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich("Idea Lab: choose one original angle, then assign Alisha, Yuna, or Both and a delivery profile.") } },
+      { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich("Idea Lab: choose one original angle (Account defaults to Yuna while Alisha is on hold) and a delivery profile.") } },
       { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich("Production Queue: work from the approved script and blueprint; publishing remains manual.") } },
     ] as any,
   });

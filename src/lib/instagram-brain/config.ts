@@ -8,6 +8,37 @@ export const INSTAGRAM_BRAIN_PILLARS = [
 
 export type InstagramBrainPillar = (typeof INSTAGRAM_BRAIN_PILLARS)[number];
 
+/**
+ * Yuna's three content pillars (Fortune-approved 2026-11-12). Notion select "Pillar".
+ * The older 5-way taxonomy above is still used for Creator Bench tagging.
+ */
+export const YUNA_PILLARS = ["Visual Storyteller", "Creative Operator", "Storytelling"] as const;
+export type YunaPillar = (typeof YUNA_PILLARS)[number];
+
+/** Content types under the pillars. Notion select "Content Type". */
+export const CONTENT_TYPES = [
+  "Creative AI Video",
+  "AI Creative Workflow",
+  "Tool/Model Test",
+  "Creator Automation",
+  "Commentary",
+] as const;
+export type ContentType = (typeof CONTENT_TYPES)[number];
+
+export const PILLAR_DEFINITIONS: Record<YunaPillar, string> = {
+  "Visual Storyteller": "AI Visual Storyteller: cinematic scenes, visual worlds, AI characters, VFX, creative experiments (what AI can make look amazing).",
+  "Creative Operator": "AI Creative Operator: workflows, tool breakdowns, prompts, systems, \"how I made this\".",
+  Storytelling: "Storytelling: short films, animated films, commercials, viral video concepts, narrative pieces (the story leads, visuals serve it).",
+};
+
+export const CONTENT_TYPE_DEFINITIONS: Record<ContentType, string> = {
+  "Creative AI Video": "A finished AI-made visual/video piece whose payoff is the visual itself.",
+  "AI Creative Workflow": "Shows the process, prompts, or pipeline used to make AI creative work.",
+  "Tool/Model Test": "Tests, compares, or reviews an AI tool or model.",
+  "Creator Automation": "AI systems or automations that help a creator produce, post, or scale.",
+  Commentary: "Opinion, news reaction, or discussion about AI and creativity.",
+};
+
 export const DELIVERY_PROFILES = [
   "Visual-first",
   "Operator-first",
@@ -19,13 +50,120 @@ export type DeliveryProfile = (typeof DELIVERY_PROFILES)[number];
 export const SCRIPT_ENGINES = ["Kallaway", "RPN", "Hybrid"] as const;
 export type ScriptEngine = (typeof SCRIPT_ENGINES)[number];
 
+export type AccountName = "Alisha" | "Yuna";
+
+/**
+ * Account targeting. Alisha is on hold (2026-11-12): her config is kept but disabled.
+ * Re-enable by setting IG_BRAIN_ACTIVE_ACCOUNTS=Yuna,Alisha (or flipping `enabled`).
+ */
+export const ACCOUNTS: Record<AccountName, { enabled: boolean; persona: string; note?: string }> = {
+  Yuna: {
+    enabled: true,
+    persona: "Yuna: an AI-generated creator in the AI Creative niche. Warm, relatable, a bit flawed but confident; she invites people into her process rather than lecturing.",
+  },
+  Alisha: {
+    enabled: false,
+    persona: "Alisha: confident, outspoken AI creator.",
+    note: "On hold since 2026-11-12 (Fortune). Kept for later; not targeted.",
+  },
+};
+
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  return !["0", "false", "no", "off"].includes(raw);
+}
+
+export function activeAccounts(): AccountName[] {
+  const raw = process.env.IG_BRAIN_ACTIVE_ACCOUNTS?.trim();
+  if (raw) {
+    return raw.split(",").map((value) => value.trim()).filter((value): value is AccountName => value === "Yuna" || value === "Alisha");
+  }
+  return (Object.keys(ACCOUNTS) as AccountName[]).filter((name) => ACCOUNTS[name].enabled);
+}
+
+/**
+ * Resolve which account a picked angle is for.
+ * - Unassigned → the single active account (Yuna) when only one is active.
+ * - A disabled account (Alisha) or "Both" while Alisha is off → error with a clear message.
+ */
+export function resolveTargetAccount(
+  requested: "Unassigned" | "Alisha" | "Yuna" | "Both",
+  active: AccountName[] = activeAccounts(),
+): "Alisha" | "Yuna" | "Both" {
+  if (active.length === 0) throw new Error("No Instagram account is active (IG_BRAIN_ACTIVE_ACCOUNTS is empty)");
+  if (requested === "Unassigned") {
+    if (active.length === 1) return active[0];
+    throw new Error("Choose Yuna, Alisha, or Both before generating a script");
+  }
+  if (requested === "Both") {
+    const missing = (["Alisha", "Yuna"] as AccountName[]).filter((name) => !active.includes(name));
+    if (missing.length) throw new Error(`"Both" is not available: ${missing.join(", ")} is on hold. Set Account to ${active.join(" or ")}.`);
+    return "Both";
+  }
+  if (!active.includes(requested)) throw new Error(`${requested} is on hold. Set Account to ${active.join(" or ")}.`);
+  return requested;
+}
+
+/**
+ * Estimated USD cost per paid call, used for the spending cap before a call is made.
+ * After the call, the provider-reported cost replaces the estimate in the log when available
+ * (Jev usage.cost, OpenRouter usage.cost for MiniMax, Apify run usageTotalUsd if higher).
+ * Estimates are deliberately on the high side (see creator-brain-guardrails-2026-11-12.md for sources).
+ */
+export const COST_ESTIMATES_USD = {
+  /** apify/instagram-reel-scraper: $2.60 / 1,000 results on the Free plan (per result). */
+  apifyReelResult: envNumber("IG_BRAIN_COST_APIFY_REEL_RESULT", 0.0026),
+  /** apple_yang/instagram-transcripts-scraper: $0.001/result + audio-to-text + enhanced crawl (per reel, padded). */
+  apifyTranscript: envNumber("IG_BRAIN_COST_APIFY_TRANSCRIPT", 0.02),
+  /** typesafe/jev-1.13 decision call via OpenRouter. Measured ~$0.00001/decision in Sept tests; padded 100x. */
+  jevCall: envNumber("IG_BRAIN_COST_JEV_CALL", 0.001),
+  /** Gemini Flash video analysis of one Reel (~60s video ≈ 18k input tokens + ~2k output), padded ~2x. */
+  geminiAnalysis: envNumber("IG_BRAIN_COST_GEMINI_ANALYSIS", 0.03),
+  /** MiniMax M3 via OpenRouter, one JSON generation call (angles / script / blueprint). */
+  minimaxCall: envNumber("IG_BRAIN_COST_MINIMAX_CALL", 0.03),
+} as const;
+
 export const INSTAGRAM_BRAIN_CONFIG = {
   jevModel: process.env.IG_BRAIN_JEV_MODEL || "typesafe/jev-1.13",
   minimaxModel: process.env.IG_BRAIN_MINIMAX_MODEL || "minimax/minimax-m3",
   geminiModel: process.env.IG_BRAIN_GEMINI_MODEL || "gemini-3.8-flash",
-  reelsPerCreator: Number(process.env.IG_BRAIN_REELS_PER_CREATOR || 3),
-  creatorsPerScan: Number(process.env.IG_BRAIN_CREATORS_PER_SCAN || 5),
-  deepAnalysisLimitPerRun: Number(process.env.IG_BRAIN_DEEP_ANALYSIS_LIMIT || 5),
+  reelsPerCreator: envNumber("IG_BRAIN_REELS_PER_CREATOR", 3),
+  creatorsPerScan: envNumber("IG_BRAIN_CREATORS_PER_SCAN", 5),
+  deepAnalysisLimitPerRun: envNumber("IG_BRAIN_DEEP_ANALYSIS_LIMIT", 5),
+  /** Apify reel scraper: exclude Instagram Trial Reels (they pollute baselines and create "duplicates"). */
+  skipTrialReels: envBool("IG_BRAIN_SKIP_TRIAL_REELS", true),
+  /**
+   * Spending cap for one scan run, in USD. Covers Apify scraping, transcripts, the Jev fit check,
+   * and the Gemini analyses the scan queues (reserved up front). Default $1.00: a full default scan
+   * (5 creators x 3 reels + 5 analyses) is estimated at ~$0.86 worst case, so the cap lets the
+   * normal scan finish but stops anything bigger (e.g. a raised creator limit) cleanly.
+   */
+  scanBudgetUsd: envNumber("IG_BRAIN_SCAN_BUDGET_USD", 1.0),
+  /**
+   * Spending cap for one action task (angles, revise angle, script, blueprint, analysis), in USD.
+   * Default $0.25: the worst case is angles at 3 MiniMax + 3 Jev calls ≈ $0.10 estimated.
+   */
+  actionBudgetUsd: envNumber("IG_BRAIN_ACTION_BUDGET_USD", 0.25),
+  /**
+   * Minimum Performance Score (0-100; 50 = the creator's median Reel) a new Reel needs before it is
+   * sent to Gemini. Default 60: clearly above the creator's own typical Reel.
+   */
+  minPerformanceScoreForAnalysis: envNumber("IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS", 60),
+  /**
+   * Minimum Priority Score (0-100) an analysed Reel needs before MiniMax angles are generated.
+   * Default 60 (Top Opportunities shows >= 70). Tick "Manual Override" on the Reel to bypass.
+   */
+  minPriorityScoreForAngles: envNumber("IG_BRAIN_MIN_PRIORITY_FOR_ANGLES", 60),
+  /** Optional JSONL cost log path (best effort; Trigger's run output + metadata is the durable record). */
+  costLogFile: process.env.IG_BRAIN_COST_LOG_FILE ?? ".tmp/ig-brain-cost-log.jsonl",
   priorityWeights: {
     performance: 0.45,
     strategicFit: 0.3,

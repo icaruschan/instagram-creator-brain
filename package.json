@@ -4,7 +4,11 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "tsc --noEmit && tsx scripts/test-instagram-brain-scoring.ts && tsx scripts/test-production-brief.ts",
+    "test": "tsc --noEmit && tsx scripts/test-instagram-brain-scoring.ts && tsx scripts/test-production-brief.ts && tsx scripts/test-guardrails.ts",
+    "test:guardrails": "tsx scripts/test-guardrails.ts",
+    "migrate:yuna-guardrails:plan": "tsx scripts/migrate-yuna-guardrails.ts --plan",
+    "migrate:yuna-guardrails:dry": "tsx scripts/migrate-yuna-guardrails.ts",
+    "migrate:yuna-guardrails": "tsx scripts/migrate-yuna-guardrails.ts --apply",
     "test:scoring": "tsx scripts/test-instagram-brain-scoring.ts",
     "migrate:notion": "tsx scripts/migrate-instagram-creator-brain.ts",
     "migrate:notion:dry": "tsx scripts/migrate-instagram-creator-brain.ts --dry-run",

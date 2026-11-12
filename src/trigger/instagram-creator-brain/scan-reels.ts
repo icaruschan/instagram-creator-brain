@@ -1,5 +1,6 @@
 import { task, tasks } from "@trigger.dev/sdk/v3";
-import { scrapeInstagramReels } from "../../lib/apify";
+import { reelScrapeResultsLimit, scrapeInstagramReels } from "../../lib/apify";
+import { CostLedger, estimateCost, isBudgetExceeded, publishCostSummary } from "../../lib/instagram-brain/cost";
 import { INSTAGRAM_BRAIN_CONFIG } from "../../lib/instagram-brain/config";
 import {
   createOrUpdateReel,
@@ -20,21 +21,60 @@ export interface ScanInstagramPayload {
   creatorPageId?: string;
   creatorLimit?: number;
   reelsPerCreator?: number;
+  /** Override the per-run spending cap (USD). Defaults to IG_BRAIN_SCAN_BUDGET_USD / $1.00. */
+  budgetUsd?: number;
+  /** Override the Gemini cut-off (Performance Score 0-100). Defaults to IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS / 60. */
+  minPerformanceScore?: number;
+  /** Override how many Gemini analyses this run may queue. Defaults to IG_BRAIN_DEEP_ANALYSIS_LIMIT / 5. */
+  analysisLimit?: number;
+}
+
+/** Estimated cost of one queued Gemini analysis task (video analysis + one Jev value call). */
+export function estimatedAnalysisCost(): number {
+  return estimateCost("gemini-analysis") + estimateCost("jev");
+}
+
+/** Estimated worst-case cost of scanning one creator. */
+export function estimatedCreatorScanCost(reelsPerCreator: number): number {
+  return estimateCost("apify-reel-scrape", reelScrapeResultsLimit(reelsPerCreator))
+    + estimateCost("apify-transcript", reelsPerCreator)
+    + estimateCost("jev", reelsPerCreator);
 }
 
 export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
+  const ledger = new CostLedger("scan-reels", payload.budgetUsd ?? INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd);
+  const reelsPerCreator = payload.reelsPerCreator ?? INSTAGRAM_BRAIN_CONFIG.reelsPerCreator;
+  const minPerformanceScore = payload.minPerformanceScore ?? INSTAGRAM_BRAIN_CONFIG.minPerformanceScoreForAnalysis;
+  const analysisLimit = payload.analysisLimit ?? INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
+  const perAnalysis = estimatedAnalysisCost();
+  const perCreator = estimatedCreatorScanCost(reelsPerCreator);
+  // Hold back money for the Gemini analyses this scan may queue, so scraping can't eat all of it.
+  const analysisHoldback = Math.min(analysisLimit, Math.floor(ledger.capUsd / perAnalysis)) * perAnalysis;
+  if (analysisHoldback > 0) ledger.reserve(analysisHoldback, "held back for queued Gemini analyses");
+  let stoppedReason: string | null = null;
+
   const creators = payload.creatorPageId
     ? [await getInstagramCreator(payload.creatorPageId)]
     : await getActiveInstagramCreators(payload.creatorLimit ?? INSTAGRAM_BRAIN_CONFIG.creatorsPerScan);
   const results: Array<Record<string, unknown>> = [];
   const candidates: Array<{ reelPageId: string; performanceScore: number; fitScore: number }> = [];
   for (const creator of creators) {
+    if (stoppedReason) {
+      results.push({ creator: creator.handle, status: "skipped", reason: stoppedReason });
+      continue;
+    }
+    if (!ledger.canAfford(perCreator)) {
+      stoppedReason = `Spending cap: scanning @${creator.handle} needs ~$${perCreator.toFixed(3)}, only $${ledger.remainingUsd.toFixed(3)} left of $${ledger.capUsd.toFixed(2)}`;
+      results.push({ creator: creator.handle, status: "skipped", reason: stoppedReason });
+      continue;
+    }
     try {
       const existingUrls = await getCreatorReelUrls(creator.pageId);
       const scan = await scrapeInstagramReels(
         creator.handle,
-        payload.reelsPerCreator ?? INSTAGRAM_BRAIN_CONFIG.reelsPerCreator,
+        reelsPerCreator,
         existingUrls,
+        ledger,
       );
       const newPageIds = new Set<string>();
       const velocityByReel = new Map<string, number>();
@@ -100,7 +140,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
         medianEngagementRate,
       });
       for (const reelPageId of newPageIds) {
-        const qualification = await runQualifyInstagramReel({ reelPageId });
+        const qualification = await runQualifyInstagramReel({ reelPageId }, ledger);
         if (qualification.fit === "Core" || qualification.fit === "Supporting") {
           const stored = await getReel(reelPageId);
           candidates.push({ reelPageId, performanceScore: stored.performanceScore, fitScore: qualification.score });
@@ -108,23 +148,57 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
       }
       results.push({ creator: creator.handle, newReels: newPageIds.size, baselineReels: reelsByUrl.size, status: "ok" });
     } catch (error) {
+      if (isBudgetExceeded(error)) {
+        stoppedReason = error.message;
+        console.warn(`Instagram Creator Brain scan stopped at @${creator.handle}: ${error.message}`);
+        results.push({ creator: creator.handle, status: "stopped", reason: error.message });
+        continue;
+      }
       console.error(`Instagram Creator Brain scan failed for @${creator.handle}:`, error);
       results.push({ creator: creator.handle, status: "failed", error: (error as Error).message });
     }
   }
-  const selected = candidates
+
+  // Release the hold-back, then reserve one slot per analysis actually queued.
+  ledger.release(analysisHoldback);
+  const aboveCutoff = candidates.filter((candidate) => candidate.performanceScore >= minPerformanceScore);
+  const belowCutoff = candidates
+    .filter((candidate) => candidate.performanceScore < minPerformanceScore)
+    .map((candidate) => ({ reelPageId: candidate.reelPageId, performanceScore: candidate.performanceScore }));
+  const ranked = aboveCutoff
     .sort((a, b) => (b.performanceScore * 0.7 + b.fitScore * 0.3) - (a.performanceScore * 0.7 + a.fitScore * 0.3))
-    .slice(0, INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun);
-  for (const candidate of selected) {
+    .slice(0, analysisLimit);
+  const queued: string[] = [];
+  for (const candidate of ranked) {
+    if (!ledger.canAfford(perAnalysis)) {
+      stoppedReason = stoppedReason || `Spending cap: no budget left to queue more Gemini analyses`;
+      break;
+    }
+    ledger.reserve(perAnalysis, `queued gemini analysis ${candidate.reelPageId}`);
     await tasks.trigger("instagram-brain-analyze-reel", { reelPageId: candidate.reelPageId });
+    queued.push(candidate.reelPageId);
   }
-  return { creators: creators.length, results, visualAnalysesQueued: selected.length };
+  const cost = ledger.summary();
+  await publishCostSummary(ledger);
+  console.log(`[cost] scan summary ${JSON.stringify(cost)}`);
+  return {
+    creators: creators.length,
+    results,
+    visualAnalysesQueued: queued.length,
+    analysisCutoff: { minPerformanceScore, candidates: candidates.length, belowCutoff },
+    stoppedReason,
+    cost,
+  };
 }
 
-/** Manual task until the user explicitly approves recurring scans. */
+/**
+ * Manual task until the user explicitly approves recurring scans.
+ * Retries are off: a retry would re-scrape (and re-pay for) everything, outside the run's spending cap.
+ * Per-creator failures are already caught inside the run.
+ */
 export const scanInstagramCreatorBrain = task({
   id: "instagram-brain-scan-reels",
   maxDuration: 14_400,
-  retry: { maxAttempts: 2 },
+  retry: { maxAttempts: 1 },
   run: async (payload: ScanInstagramPayload) => runInstagramScan(payload || {}),
 });

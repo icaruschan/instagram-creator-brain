@@ -13,6 +13,7 @@ import {
   renderProductionPlan,
 } from "./production-brief";
 import type { InstagramCreator, ReelMetrics } from "./types";
+import { activeAccounts, type ContentType, type YunaPillar } from "./config";
 import type { AnglePreview } from "./types";
 
 dotenv.config({ override: true });
@@ -125,6 +126,11 @@ export interface StoredReel {
   visualPatternValue: number;
   workflowValue: number;
   priorityScore: number;
+  status: string;
+  strategicFit: string;
+  manualOverride: boolean;
+  pillar: YunaPillar | "";
+  contentType: ContentType | "";
 }
 
 function mapReel(page: any): StoredReel {
@@ -153,6 +159,11 @@ function mapReel(page: any): StoredReel {
     visualPatternValue: p["Visual Pattern Value"]?.number || 0,
     workflowValue: p["Workflow Value"]?.number || 0,
     priorityScore: p["Priority Score"]?.number || 0,
+    status: p.Status?.select?.name || "",
+    strategicFit: p["Strategic Fit"]?.select?.name || "",
+    manualOverride: Boolean(p["Manual Override"]?.checkbox),
+    pillar: p.Pillar?.select?.name || "",
+    contentType: p["Content Type"]?.select?.name || "",
   };
 }
 
@@ -443,16 +454,19 @@ export async function updateReelStrategicFit(input: {
   fit: "Core" | "Supporting" | "Adjacent" | "Irrelevant";
   score: number;
   confidence: number;
+  pillar?: YunaPillar | null;
+  contentType?: ContentType | null;
 }): Promise<void> {
-  await notion.pages.update({
-    page_id: input.pageId,
-    properties: {
-      "Strategic Fit": { select: { name: input.fit } },
-      "Strategic Fit Score": { number: input.score },
-      "Jev Confidence": { number: input.confidence },
-      Status: { select: { name: input.fit === "Irrelevant" ? "Ignored" : "Qualified" } },
-    },
-  });
+  const properties: Record<string, any> = {
+    "Strategic Fit": { select: { name: input.fit } },
+    "Strategic Fit Score": { number: input.score },
+    "Jev Confidence": { number: input.confidence },
+    Status: { select: { name: input.fit === "Irrelevant" ? "Ignored" : "Qualified" } },
+  };
+  // Requires the 2026-11-12 migration (scripts/migrate-yuna-guardrails.ts) to have added these selects.
+  if (input.pillar) properties.Pillar = { select: { name: input.pillar } };
+  if (input.contentType) properties["Content Type"] = { select: { name: input.contentType } };
+  await notion.pages.update({ page_id: input.pageId, properties });
 }
 
 export interface ReelActionItem {
@@ -506,6 +520,11 @@ export async function setReelDisposition(
   });
 }
 
+export function defaultIdeaAccount(): "Unassigned" | "Yuna" | "Alisha" {
+  const active = activeAccounts();
+  return active.length === 1 ? active[0] : "Unassigned";
+}
+
 export async function createAngleIdeas(
   reel: StoredReel,
   angles: AnglePreview[],
@@ -518,7 +537,10 @@ export async function createAngleIdeas(
         Idea: { title: rich(angle.title) },
         "Source Reel": { relation: [{ id: reel.pageId }] },
         Status: { select: { name: "Angle Ready" } },
-        Account: { select: { name: "Unassigned" } },
+        // Yuna-only targeting: pre-assign the single active account so picking an angle is one click.
+        Account: { select: { name: defaultIdeaAccount() } },
+        ...(reel.pillar ? { Pillar: { select: { name: reel.pillar } } } : {}),
+        ...(reel.contentType ? { "Content Type": { select: { name: reel.contentType } } } : {}),
         "Delivery Profile": { select: { name: angle.deliveryProfile } },
         "Script Engine": { select: { name: angle.scriptEngine } },
         "Angle Summary": { rich_text: rich(angle.summary) },
@@ -561,6 +583,10 @@ export interface IdeaRecord {
   pageId: string;
   title: string;
   sourceReelId: string;
+  status: string;
+  pillar: string;
+  contentType: string;
+  revisionNotes: string;
   account: "Unassigned" | "Alisha" | "Yuna" | "Both";
   deliveryProfile: "Visual-first" | "Operator-first" | "Hybrid";
   scriptEngine: "Kallaway" | "RPN" | "Hybrid";
@@ -583,6 +609,10 @@ export async function getIdea(pageId: string): Promise<IdeaRecord> {
     pageId,
     title: titlePlain(p.Idea),
     sourceReelId: p["Source Reel"]?.relation?.[0]?.id || "",
+    status: p.Status?.select?.name || "",
+    pillar: p.Pillar?.select?.name || "",
+    contentType: p["Content Type"]?.select?.name || "",
+    revisionNotes: textPlain(p["Revision Notes"]),
     account: p.Account?.select?.name || "Unassigned",
     deliveryProfile: p["Delivery Profile"]?.select?.name || "Hybrid",
     scriptEngine: p["Script Engine"]?.select?.name || "Kallaway",
@@ -639,6 +669,41 @@ export async function setIdeaActionState(
   await notion.pages.update({ page_id: pageId, properties });
 }
 
+/**
+ * Overwrite an Idea Lab angle in place with a revised version (Revise Angle).
+ * The previous version is kept in a collapsed toggle on the page so nothing is lost.
+ */
+export async function reviseIdeaAngle(
+  idea: IdeaRecord,
+  revised: AnglePreview,
+): Promise<void> {
+  await appendToggle(
+    idea.pageId,
+    `Previous version (before revision ${new Date().toISOString().slice(0, 10)})`,
+    JSON.stringify(idea.angle, null, 2),
+  );
+  await notion.pages.update({
+    page_id: idea.pageId,
+    properties: {
+      Idea: { title: rich(revised.title) },
+      Status: { select: { name: "Angle Ready" } },
+      "Delivery Profile": { select: { name: revised.deliveryProfile } },
+      "Script Engine": { select: { name: revised.scriptEngine } },
+      "Angle Summary": { rich_text: rich(revised.summary) },
+      "Spoken Hook": { rich_text: rich(revised.spokenHook) },
+      "Text Hook": { rich_text: rich(revised.textHook) },
+      "Visual Hook": { rich_text: rich(revised.visualHook) },
+      "Audio Hook": { rich_text: rich(revised.audioHook) },
+      "Three-Beat Outline": { rich_text: rich(revised.threeBeatOutline.join(" → ")) },
+      "Why It Works": { rich_text: rich(revised.whyItWorks) },
+      "What Not To Copy": { rich_text: rich(revised.whatNotToCopy) },
+      "Action Requested": { select: { name: "None" } },
+      "Action State": { select: { name: "Complete" } },
+      "Last Error": { rich_text: [] },
+    },
+  });
+}
+
 export async function setIdeaDisposition(
   pageId: string,
   status: "Parked" | "Rejected",
@@ -656,6 +721,7 @@ export async function setIdeaDisposition(
 export async function createProductionItem(
   idea: IdeaRecord,
   scriptPackage: Record<string, any>,
+  account: "Alisha" | "Yuna" | "Both" = idea.account === "Unassigned" ? "Yuna" : idea.account,
 ): Promise<string> {
   const script = normalizeScriptPackage(scriptPackage, idea.title);
   const page: any = await notion.pages.create({
@@ -664,7 +730,12 @@ export async function createProductionItem(
       "Content Brief": { title: rich(idea.title) },
       Idea: { relation: [{ id: idea.pageId }] },
       Status: { select: { name: "Script Ready" } },
-      Account: { select: { name: idea.account } },
+      Account: { select: { name: account } },
+      // A/B scripts: the AI V2.3 script lands in Spoken Script; Lara writes hers in "Lara Script".
+      "Lara Script Status": { select: { name: "Needed" } },
+      "Chosen Script": { select: { name: "Undecided" } },
+      ...(idea.pillar ? { Pillar: { select: { name: idea.pillar } } } : {}),
+      ...(idea.contentType ? { "Content Type": { select: { name: idea.contentType } } } : {}),
       "Delivery Profile": { select: { name: idea.deliveryProfile } },
       "Script Engine": { select: { name: idea.scriptEngine } },
       "Action Requested": { select: { name: "None" } },
@@ -677,7 +748,7 @@ export async function createProductionItem(
     },
     children: [
       ...renderCreativeBrief({
-        account: idea.account,
+        account,
         deliveryProfile: idea.deliveryProfile,
         summary: idea.angle.summary,
         script,
@@ -692,6 +763,7 @@ export async function createProductionItem(
     page_id: idea.pageId,
     properties: {
       Status: { select: { name: "Script Ready" } },
+      Account: { select: { name: account } },
       "Action Requested": { select: { name: "None" } },
       "Action State": { select: { name: "Idle" } },
     },
@@ -759,6 +831,9 @@ export interface ProductionRecord {
   deliveryProfile: string;
   scriptEngine: string;
   scriptPackage: Record<string, unknown>;
+  laraScript: string;
+  laraScriptStatus: string;
+  chosenScript: string;
 }
 
 export async function getProductionItem(pageId: string): Promise<ProductionRecord> {
@@ -777,6 +852,9 @@ export async function getProductionItem(pageId: string): Promise<ProductionRecor
     account: p.Account?.select?.name || "Unassigned",
     deliveryProfile: p["Delivery Profile"]?.select?.name || "Hybrid",
     scriptEngine: p["Script Engine"]?.select?.name || "Kallaway",
+    laraScript: textPlain(p["Lara Script"]),
+    laraScriptStatus: p["Lara Script Status"]?.select?.name || "",
+    chosenScript: p["Chosen Script"]?.select?.name || "Undecided",
     scriptPackage: normalizeScriptPackage(Object.keys(scriptPackage).length ? scriptPackage : {
       spokenScript: textPlain(p["Spoken Script"]),
       spokenHook: textPlain(p["Spoken Hook"]),

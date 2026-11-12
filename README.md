@@ -24,3 +24,14 @@ In Notion, choose an action on an Outlier Card to generate angles. Pick an accou
 Production Queue pages lead with a readable creative brief and timed script. The production shot guide is collapsed beneath it; machine-readable JSON remains at the bottom for downstream tasks. Until action polling is explicitly enabled, choosing a Notion action records the choice but does not automatically run a task.
 
 The Notion workspace contains Creator Bench, Reel Intelligence, Reel Snapshots, Idea Lab, Production Queue, and Performance Log.
+
+## Guardrails (branch feat/yuna-guardrails, 2026-11-12)
+
+- **Yuna only.** `IG_BRAIN_ACTIVE_ACCOUNTS` defaults to `Yuna`. Alisha's config is kept in `ACCOUNTS` but disabled; angles default to Account = Yuna, and scripts for Alisha/Both are refused with a clear message.
+- **Trial Reels skipped.** The Apify reel scraper is called with `skipTrialReels: true` (`IG_BRAIN_SKIP_TRIAL_REELS`).
+- **Spending caps + cost log.** Every paid call (Apify, Jev, Gemini, MiniMax) is checked against a per-run cap before it is made and logged after (`[cost]` lines in the Trigger log, a `cost` block in each run's output and metadata, and best-effort `.tmp/ig-brain-cost-log.jsonl`). Scan cap `IG_BRAIN_SCAN_BUDGET_USD` (default $1.00); per action task `IG_BRAIN_ACTION_BUDGET_USD` (default $0.25). A capped scan stops cleanly and reports `stoppedReason`.
+- **Score cut-offs.** Gemini analysis needs Performance Score ≥ `IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS` (60). Angles need a Gemini analysis and Priority ≥ `IG_BRAIN_MIN_PRIORITY_FOR_ANGLES` (60); tick **Manual Override** on the Reel to bypass the score cut-off.
+- **Revise Angle** works: write optional feedback in the idea's **Revision Notes**, choose Revise Angle; the angle is rewritten in place and the old version is kept in a toggle.
+- **A/B scripts.** Generate Script still writes the AI ScriptWriter V2.3 script, and sets **Lara Script Status = Needed** next to an empty **Lara Script** field. Fortune records the pick in **Chosen Script** (Undecided / AI V2.3 / Lara); the blueprint uses Lara's script when she is chosen.
+- **Pillar / Content Type.** The Jev fit check tags each Reel with Yuna's Pillar (Visual Storyteller, Creative Operator, Storytelling) and a Content Type; angles and briefs inherit them.
+- **Notion migration:** run `npm run migrate:yuna-guardrails:dry` (read-only), then `npm run migrate:yuna-guardrails` **before** deploying this branch — the new code writes the new properties.

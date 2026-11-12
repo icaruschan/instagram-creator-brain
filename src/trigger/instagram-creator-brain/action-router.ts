@@ -47,8 +47,12 @@ export async function runInstagramActionRouter() {
     if (item.action === "Generate Script") {
       await setIdeaActionState(item.pageId, "Queued");
       await tasks.trigger("instagram-brain-generate-script", { ideaPageId: item.pageId });
+    } else if (item.action === "Revise Angle") {
+      // Optional: write what to change in the idea's "Revision Notes" before choosing Revise Angle.
+      await setIdeaActionState(item.pageId, "Queued");
+      await tasks.trigger("instagram-brain-revise-angle", { ideaPageId: item.pageId });
     } else {
-      await setIdeaActionState(item.pageId, "Failed", "Angle revision is not implemented yet", true);
+      await setIdeaActionState(item.pageId, "Failed", `Unsupported idea action: ${item.action}`, true);
     }
   }
 

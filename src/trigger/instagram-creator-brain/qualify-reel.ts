@@ -1,6 +1,8 @@
 import { task } from "@trigger.dev/sdk/v3";
 import { getInstagramCreator, getReel, updateReelStrategicFit } from "../../lib/instagram-brain/notion";
-import { runJevDecision } from "../../lib/instagram-brain/jev";
+import { STRATEGIC_FIT_CRITERIA, buildPillarQuestions, readPillarAnswers, runJevDecision } from "../../lib/instagram-brain/jev";
+import { PILLAR_DEFINITIONS } from "../../lib/instagram-brain/config";
+import { actionLedger, publishCostSummary, type CostLedger } from "../../lib/instagram-brain/cost";
 
 export interface QualifyReelPayload { reelPageId: string }
 
@@ -18,45 +20,52 @@ function expectedFit(probabilities: Record<string, number>): number {
   ) * 10) / 10;
 }
 
-export async function runQualifyInstagramReel({ reelPageId }: QualifyReelPayload) {
+/**
+ * Jev fit check (one decision call): strategic fit for Yuna, plus her Pillar and the Content Type.
+ */
+export async function runQualifyInstagramReel({ reelPageId }: QualifyReelPayload, ledger?: CostLedger) {
     const reel = await getReel(reelPageId);
     const creator = await getInstagramCreator(reel.creatorPageId);
     const state = {
+      account: "Yuna (AI Creative niche)",
       creator: `@${creator.handle}`,
       creatorPillars: creator.pillars,
       caption: reel.caption,
       transcript: reel.transcript,
-      activePillars: ["Creative AI Video", "AI Creative Workflow"],
-      supportingPillars: ["AI Tools & Model Experiments", "Creator AI Systems & Automation", "AI & Creative Commentary"],
+      yunaPillars: Object.values(PILLAR_DEFINITIONS),
     };
     const response = await runJevDecision(state, {
       strategic_fit: {
         type: "choice",
-        instructions: "How directly does this source Reel fit the Instagram Creator Brain?",
-        criteria: {
-          core: "Directly fits Creative AI Video or AI Creative Workflow.",
-          supporting: "Fits a supporting AI tools, creator systems, or creative commentary lane.",
-          adjacent: "Broadly relevant to AI but weakly connected to the active content pillars.",
-          irrelevant: "Unrelated, generic, or unsuitable as a source for this creator brain.",
-        },
+        instructions: "How directly does this source Reel fit Yuna's AI Creative pillars as inspiration for an original Instagram Reel?",
+        criteria: STRATEGIC_FIT_CRITERIA,
       },
-    });
+      ...buildPillarQuestions(),
+    }, { ledger, label: `jev fit check ${reel.shortcode}` });
     const answer = response.answers.strategic_fit;
     const fit = String(answer.choice || "irrelevant");
     const label = (fit.charAt(0).toUpperCase() + fit.slice(1)) as "Core" | "Supporting" | "Adjacent" | "Irrelevant";
     const score = expectedFit(answer.probabilities || { [fit]: 1 });
+    const { pillar, contentType } = readPillarAnswers(response.answers);
     await updateReelStrategicFit({
       pageId: reelPageId,
       fit: label,
       score,
       confidence: Number(answer.confidence || 0),
+      pillar: label === "Irrelevant" ? null : pillar,
+      contentType: label === "Irrelevant" ? null : contentType,
     });
-    return { reelPageId, fit: label, score };
+    return { reelPageId, fit: label, score, pillar, contentType };
 }
 
 export const qualifyInstagramReel = task({
   id: "instagram-brain-qualify-reel",
   maxDuration: 300,
   retry: { maxAttempts: 2 },
-  run: runQualifyInstagramReel,
+  run: async (payload: QualifyReelPayload) => {
+    const ledger = actionLedger("qualify-reel");
+    const result = await runQualifyInstagramReel(payload, ledger);
+    await publishCostSummary(ledger);
+    return { ...result, cost: ledger.summary() };
+  },
 });

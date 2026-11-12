@@ -1,5 +1,7 @@
 import { ApifyClient } from "apify-client";
 import dotenv from "dotenv";
+import { INSTAGRAM_BRAIN_CONFIG } from "./instagram-brain/config";
+import { estimateCost, isBudgetExceeded, type CostLedger } from "./instagram-brain/cost";
 
 dotenv.config({ override: true });
 
@@ -58,23 +60,42 @@ function shortcode(item: any): string {
   return item.shortCode || item.code || item.id || "";
 }
 
+/** How many items the reel scraper is asked for per creator (baseline pool + selection). */
+export function reelScrapeResultsLimit(resultsLimit: number): number {
+  return Math.max(30, resultsLimit * 2);
+}
+
 export async function scrapeInstagramReels(
   username: string,
   resultsLimit = 3,
   excludeUrls: string[] = [],
+  ledger?: CostLedger,
 ): Promise<InstagramReelScan> {
   const handle = cleanHandle(username);
+  const scrapeLimit = reelScrapeResultsLimit(resultsLimit);
+  const scrapeEstimate = estimateCost("apify-reel-scrape", scrapeLimit);
+  ledger?.ensure(scrapeEstimate, `reel scrape @${handle}`);
   const metadata = await withApify(async (client) => {
-    const run = await client.actor("apify/instagram-reel-scraper").call({
+    const run: any = await client.actor("apify/instagram-reel-scraper").call({
       username: [handle],
-      resultsLimit: Math.max(30, resultsLimit * 2),
+      resultsLimit: scrapeLimit,
+      // Trial Reels are test posts shown to non-followers; they skew baselines and look like duplicates.
+      skipTrialReels: INSTAGRAM_BRAIN_CONFIG.skipTrialReels,
     });
     const { items } = await client.dataset(run.defaultDatasetId).listItems();
+    const resultCount = (items || []).length;
+    // Pay-per-event actor: charge is per result. Count what came back, and take Apify's own usage figure if higher.
+    const byResults = estimateCost("apify-reel-scrape", resultCount);
+    const reported = Number(run?.usageTotalUsd);
+    ledger?.record("apify-reel-scrape", `reel scrape @${handle} (${resultCount} results)`, scrapeEstimate,
+      Math.max(byResults, Number.isFinite(reported) ? reported : 0));
     return (items || []) as any[];
   });
 
   const chronological = metadata
     .filter((item) => item.url)
+    // Belt and braces: drop anything the actor still flags as a trial reel.
+    .filter((item) => !(INSTAGRAM_BRAIN_CONFIG.skipTrialReels && (item.isTrialReel === true || item.trialReel === true)))
     .sort((a, b) => Date.parse(String(b.timestamp || b.createdAt || "")) - Date.parse(String(a.timestamp || a.createdAt || "")));
   const unseen = chronological.filter((item) => !excludeUrls.includes(item.url));
   const newestCount = Math.ceil(resultsLimit / 2);
@@ -89,15 +110,24 @@ export async function scrapeInstagramReels(
     const batch = selected.slice(index, index + 3);
     await Promise.all(batch.map(async (item) => {
       if (!item.url) return;
+      const transcriptEstimate = estimateCost("apify-transcript");
       try {
+        ledger?.ensure(transcriptEstimate, `transcript ${item.url}`);
         await withApify(async (client) => {
-          const run = await client.actor("apple_yang/instagram-transcripts-scraper").call({ videoUrl: item.url });
+          const run: any = await client.actor("apple_yang/instagram-transcripts-scraper").call({ videoUrl: item.url });
+          const reported = Number(run?.usageTotalUsd);
+          ledger?.record("apify-transcript", `transcript ${shortcode(item)}`, transcriptEstimate,
+            Number.isFinite(reported) && reported > transcriptEstimate ? reported : null);
           const { items } = await client.dataset(run.defaultDatasetId).listItems();
           const transcript = (items?.[0] as any)?.text;
           const code = (items?.[0] as any)?.code || shortcode(item);
           if (code && transcript) transcripts.set(code, transcript);
         });
       } catch (error) {
+        if (isBudgetExceeded(error)) {
+          console.warn(`Transcript skipped for ${item.url}: spending cap reached`);
+          return;
+        }
         console.warn(`Transcript unavailable for ${item.url}: ${(error as Error).message}`);
       }
     }));
