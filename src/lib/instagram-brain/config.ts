@@ -87,6 +87,18 @@ function videoProvider(name: string, fallback: VideoProvider | "none"): VideoPro
   throw new Error(`${name} must be "openrouter" or "gemini"${fallback === "none" ? ' or "none"' : ""} (got "${raw}")`);
 }
 
+/** Optional spending cap: a positive number, otherwise unlimited (Infinity). */
+export function parseCap(raw: string | undefined | null): number {
+  const text = String(raw ?? "").trim().toLowerCase();
+  if (!text || ["off", "none", "unlimited", "false", "no"].includes(text)) return Infinity;
+  const value = Number(text);
+  return Number.isFinite(value) && value > 0 ? value : Infinity;
+}
+
+function envCap(name: string): number {
+  return parseCap(process.env[name]);
+}
+
 function envBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.trim().toLowerCase();
   if (!raw) return fallback;
@@ -196,17 +208,14 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   /** Apify reel scraper: exclude Instagram Trial Reels (they pollute baselines and create "duplicates"). */
   skipTrialReels: envBool("IG_BRAIN_SKIP_TRIAL_REELS", true),
   /**
-   * Spending cap for one scan run, in USD. Covers Apify scraping, transcripts, the Jev fit check,
-   * and the Gemini analyses the scan queues (reserved up front). Default $1.00: a full default scan
-   * (5 creators x 3 reels + 5 analyses) is estimated at ~$0.86 worst case, so the cap lets the
-   * normal scan finish but stops anything bigger (e.g. a raised creator limit) cleanly.
+   * Spending caps are OFF by default (Fortune, Nov 12 3:27 PM WAT: "Eliminate the spending cap").
+   * Unset / empty / "off" / "none" / 0 = unlimited (Infinity): no run is ever stopped for budget.
+   * Every paid call is still logged ([cost] lines + the run's cost summary).
+   * Optional opt-in: set IG_BRAIN_SCAN_BUDGET_USD (per scan run, incl. analyses it queues) or
+   * IG_BRAIN_ACTION_BUDGET_USD (per action task) to a positive USD amount, or pass payload.budgetUsd on a scan.
    */
-  scanBudgetUsd: envNumber("IG_BRAIN_SCAN_BUDGET_USD", 1.0),
-  /**
-   * Spending cap for one action task (angles, revise angle, script, blueprint, analysis), in USD.
-   * Default $0.25: the worst case is angles at 3 MiniMax + 3 Jev calls ≈ $0.10 estimated.
-   */
-  actionBudgetUsd: envNumber("IG_BRAIN_ACTION_BUDGET_USD", 0.25),
+  scanBudgetUsd: envCap("IG_BRAIN_SCAN_BUDGET_USD"),
+  actionBudgetUsd: envCap("IG_BRAIN_ACTION_BUDGET_USD"),
   /**
    * Minimum Performance Score (0-100; 50 = the creator's median Reel) a new Reel needs before it is
    * sent to Gemini. Default 60: clearly above the creator's own typical Reel.

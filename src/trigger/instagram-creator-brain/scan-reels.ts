@@ -1,7 +1,7 @@
 import { task, tasks } from "@trigger.dev/sdk/v3";
 import { fetchReelTranscripts, reelScrapeResultsLimit, scrapeInstagramReels, type InstagramReel } from "../../lib/apify";
 import { CostLedger, estimateCost, estimateVideoAnalysisCost, isBudgetExceeded, publishCostSummary } from "../../lib/instagram-brain/cost";
-import { INSTAGRAM_BRAIN_CONFIG } from "../../lib/instagram-brain/config";
+import { INSTAGRAM_BRAIN_CONFIG, parseCap } from "../../lib/instagram-brain/config";
 import {
   createOrUpdateReel,
   createReelSnapshot,
@@ -31,7 +31,7 @@ export interface ScanInstagramPayload {
   creatorPageId?: string;
   creatorLimit?: number;
   reelsPerCreator?: number;
-  /** Override the per-run spending cap (USD). Defaults to IG_BRAIN_SCAN_BUDGET_USD / $1.00. */
+  /** Optional per-run spending cap (USD). Default: none (unlimited) unless IG_BRAIN_SCAN_BUDGET_USD is set. */
   budgetUsd?: number;
   /** Override the video-analysis cut-off (Performance Score 0-100). Defaults to IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS / 60. */
   minPerformanceScore?: number;
@@ -54,15 +54,16 @@ export function estimatedCreatorScanCost(reelsPerCreator: number): number {
 }
 
 export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
-  const ledger = new CostLedger("scan-reels", payload.budgetUsd ?? INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd);
+  // No cap by default (unlimited); payload.budgetUsd / IG_BRAIN_SCAN_BUDGET_USD opt back in.
+  const ledger = new CostLedger("scan-reels", payload.budgetUsd != null ? parseCap(String(payload.budgetUsd)) : INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd);
   const reelsPerCreator = payload.reelsPerCreator ?? INSTAGRAM_BRAIN_CONFIG.reelsPerCreator;
   const minPerformanceScore = payload.minPerformanceScore ?? INSTAGRAM_BRAIN_CONFIG.minPerformanceScoreForAnalysis;
   const analysisLimit = payload.analysisLimit ?? INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
   const windowDays = payload.recentWindowDays ?? INSTAGRAM_BRAIN_CONFIG.recentWindowDays;
   const perAnalysis = estimatedAnalysisCost();
   const perCreator = estimatedCreatorScanCost(reelsPerCreator);
-  // Hold back money for the video analyses this scan may queue, so scraping can't eat all of it.
-  const analysisHoldback = Math.min(analysisLimit, Math.floor(ledger.capUsd / perAnalysis)) * perAnalysis;
+  // With an opt-in cap: hold back money for the video analyses this scan may queue, so scraping can't eat all of it.
+  const analysisHoldback = ledger.unlimited ? 0 : Math.min(analysisLimit, Math.floor(ledger.capUsd / perAnalysis)) * perAnalysis;
   if (analysisHoldback > 0) ledger.reserve(analysisHoldback, "held back for queued video analyses");
   let stoppedReason: string | null = null;
 

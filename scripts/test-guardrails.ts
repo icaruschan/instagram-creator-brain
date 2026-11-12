@@ -30,22 +30,39 @@ async function main() {
   ledger.ensure(0.03, "fits again");
   assert.equal(ledger.summary().byKind.minimax, 0.03);
 
-  // Cap stays $1 (raising it needs Fortune's approval). With 8 slots per creator the worst-case estimate is
-  // $0.246/creator: a 1-creator scan fits easily, a full 5-creator scan (~$1.31 worst case) does not, so the cap
-  // stops it cleanly after 3 creators (the 5 analyses are held back first).
-  assert.equal(INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, 1);
+  // Spending caps are off by default (Fortune, Nov 12): unlimited, never stops a run; logging stays.
+  assert.equal(INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, Infinity);
+  assert.equal(INSTAGRAM_BRAIN_CONFIG.actionBudgetUsd, Infinity);
   assert.equal(INSTAGRAM_BRAIN_CONFIG.reelsPerCreator, 8);
+  const { parseCap } = await import("../src/lib/instagram-brain/config");
+  assert.equal(parseCap(undefined), Infinity);
+  assert.equal(parseCap(""), Infinity);
+  assert.equal(parseCap("off"), Infinity);
+  assert.equal(parseCap("0"), Infinity);
+  assert.equal(parseCap("-1"), Infinity);
+  assert.equal(parseCap("abc"), Infinity);
+  assert.equal(parseCap("1.5"), 1.5); // opt-in still works
+  const open = new CostLedger("open", INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, quiet);
+  assert.equal(open.unlimited, true);
+  open.reserve(1_000, "huge reservation");
+  open.ensure(1_000_000, "huge call");
+  open.record("apify-transcript", "t", 0.02, 0.5);
+  assert.equal(open.canAfford(Number.MAX_SAFE_INTEGER), true);
+  const openSummary = open.summary();
+  assert.equal(openSummary.capUsd, null);
+  assert.equal(openSummary.remainingUsd, null);
+  assert.equal(openSummary.spentUsd, 0.5);
+  assert.doesNotThrow(() => JSON.stringify(openSummary));
+  const { actionLedger } = await import("../src/lib/instagram-brain/cost");
+  assert.equal(actionLedger("angles", undefined).unlimited, true);
+  // Worst-case estimate for a full default scan (5 creators x 8 slots + 5 analyses), for the notes: ~$1.31.
   const perCreator = estimatedCreatorScanCost(INSTAGRAM_BRAIN_CONFIG.reelsPerCreator);
   assert.equal(Math.round(perCreator * 1000) / 1000, 0.246);
-  const holdback = estimatedAnalysisCost() * INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
-  const defaultScan = perCreator * INSTAGRAM_BRAIN_CONFIG.creatorsPerScan + holdback;
+  const defaultScan = perCreator * INSTAGRAM_BRAIN_CONFIG.creatorsPerScan + estimatedAnalysisCost() * INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
   assert.equal(Math.round(defaultScan * 100) / 100, 1.31);
-  assert.ok(perCreator + holdback <= INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, "a 1-creator scan should fit the cap");
-  assert.equal(Math.floor((INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd - holdback) / perCreator), 3, "cap covers 3 full creators");
-  assert.ok(perCreator * 20 > INSTAGRAM_BRAIN_CONFIG.scanBudgetUsd, "a 20-creator scan should hit the cap");
   assert.equal(estimateCost("apify-reel-scrape", 30), 0.078);
-  // Worst-case angle generation (3 MiniMax + 3 Jev) fits the per-action cap.
-  assert.ok(3 * (estimateCost("minimax") + estimateCost("jev")) <= INSTAGRAM_BRAIN_CONFIG.actionBudgetUsd);
+  // Worst-case angle generation (3 MiniMax + 3 Jev) ≈ $0.093 estimated (no cap now).
+  assert.equal(Math.round(3 * (estimateCost("minimax") + estimateCost("jev")) * 1000) / 1000, 0.093);
 
   // 3. Score cut-off before angles (and Manual Override bypass).
   assert.match(String(angleGate({ geminiAnalysis: "", priorityScore: 90, manualOverride: false })), /No Gemini analysis/);

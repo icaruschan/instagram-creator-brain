@@ -17,7 +17,7 @@ export interface CostEntry {
   label: string;
   estimatedUsd: number;
   actualUsd: number | null;
-  /** The figure counted against the cap: actual when reported, otherwise the estimate. */
+  /** The figure logged (and counted against an opt-in cap): actual when reported, otherwise the estimate. */
   chargedUsd: number;
 }
 
@@ -97,7 +97,13 @@ export class CostLedger {
     return round(Math.max(0, this.capUsd - this.committedUsd));
   }
 
+  /** True when no cap is set (the default): ensure()/reserve() never throw. */
+  get unlimited(): boolean {
+    return !Number.isFinite(this.capUsd);
+  }
+
   canAfford(amountUsd: number): boolean {
+    if (this.unlimited) return true;
     return this.committedUsd + amountUsd <= this.capUsd + 1e-9;
   }
 
@@ -145,11 +151,12 @@ export class CostLedger {
     for (const entry of this.entries) byKind[entry.kind] = round((byKind[entry.kind] || 0) + entry.chargedUsd);
     return {
       task: this.task,
-      capUsd: this.capUsd,
+      // null = no cap (JSON can't hold Infinity).
+      capUsd: this.unlimited ? null : this.capUsd,
       spentUsd: this.spentUsd,
       reservedForQueuedTasksUsd: round(this.reservedUsd),
       committedUsd: this.committedUsd,
-      remainingUsd: this.remainingUsd,
+      remainingUsd: this.unlimited ? null : this.remainingUsd,
       calls: this.entries.length,
       byKind,
     };
