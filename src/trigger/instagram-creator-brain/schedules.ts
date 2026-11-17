@@ -10,7 +10,7 @@ import { runInstagramActionRouter } from "./action-router";
  */
 export const dailyInstagramScan = schedules.task({
   id: "instagram-brain-daily-scan",
-  cron: { pattern: "0 6 * * *", timezone: "Africa/Lagos" },
+  cron: { pattern: "0 6 * * *", timezone: "Africa/Lagos", window: "0m" }, // exact 06:00, no spreading
   maxDuration: 14_400,
   retry: { maxAttempts: 1 }, // a retry would re-scrape and re-pay for everything
   run: async () => runInstagramScan({}),
@@ -18,7 +18,7 @@ export const dailyInstagramScan = schedules.task({
 
 export const instagramActionRouterSchedule = schedules.task({
   id: "instagram-brain-action-router-15m",
-  cron: "*/15 * * * *",
+  cron: { pattern: "*/15 * * * *", window: "0m" },
   maxDuration: 900,
   retry: { maxAttempts: 2 },
   run: async () => runInstagramActionRouter(),
