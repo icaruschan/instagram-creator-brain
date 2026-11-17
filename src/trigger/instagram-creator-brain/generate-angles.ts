@@ -47,7 +47,7 @@ export const generateInstagramAngles = task({
           0.65,
           { ledger, label: `minimax angles attempt ${attempt + 1}` },
         );
-        const proposed = normalizeAngles(raw);
+        const proposed = normalizeAngles(raw, { pillar: reel.pillar, contentType: reel.contentType });
         if (proposed.length === 0) throw new Error("MiniMax returned no usable angle previews");
         const checks = await originalityResults(reel.geminiAnalysis, proposed, ledger);
         angles = proposed.filter((_, index) => checks[index].tooClose < 0.5 && checks[index].aiFit >= 0.6);

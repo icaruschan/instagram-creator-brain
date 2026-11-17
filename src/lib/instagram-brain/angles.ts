@@ -1,12 +1,70 @@
-import { INSTAGRAM_BRAIN_CONFIG } from "./config";
+import { CONTENT_TYPES, INSTAGRAM_BRAIN_CONFIG, YUNA_PILLARS, type ContentType, type YunaPillar } from "./config";
 import type { CostLedger } from "./cost";
 import { runJevDecision } from "./jev";
 import type { StoredReel } from "./notion";
 import type { AnglePreview } from "./types";
 
-export function normalizeAngles(raw: Record<string, unknown>): AnglePreview[] {
+function canonicalLabel<T extends string>(value: unknown, allowed: readonly T[], aliases: Record<string, T> = {}): T | "" {
+  if (typeof value !== "string") return "";
+  const key = value.trim().toLowerCase().replace(/^ai\s+/, "").replace(/[\s_-]+/g, " ");
+  if (!key) return "";
+  for (const option of allowed) {
+    const opt = option.toLowerCase().replace(/^ai\s+/, "").replace(/[\s_-]+/g, " ");
+    if (opt === key) return option;
+  }
+  return aliases[key] || "";
+}
+
+const PILLAR_ALIASES: Record<string, YunaPillar> = {
+  "visual storytelling": "Visual Storyteller",
+  "creative operator": "Creative Operator",
+  operator: "Creative Operator",
+  story: "Storytelling",
+  "story telling": "Storytelling",
+};
+
+const CONTENT_TYPE_ALIASES: Record<string, ContentType> = {
+  "creative video": "Creative AI Video",
+  "creative workflow": "AI Creative Workflow",
+  workflow: "AI Creative Workflow",
+  "tool test": "Tool/Model Test",
+  "model test": "Tool/Model Test",
+  "tool/model test": "Tool/Model Test",
+  "tool model test": "Tool/Model Test",
+  "tools & model experiments": "Tool/Model Test",
+  automation: "Creator Automation",
+  "creator ai systems & automation": "Creator Automation",
+  "creative commentary": "Commentary",
+  "& creative commentary": "Commentary",
+};
+
+export function normalizePillar(value: unknown): YunaPillar | "" {
+  return canonicalLabel(value, YUNA_PILLARS, PILLAR_ALIASES);
+}
+
+export function normalizeContentType(value: unknown): ContentType | "" {
+  return canonicalLabel(value, CONTENT_TYPES, CONTENT_TYPE_ALIASES);
+}
+
+/**
+ * Guarantee a Visual-first angle has a usable hook: if both the visual and on-screen text hooks are blank,
+ * build a visual hook description from the first beat (or the summary) so the 0-3s opening is never empty.
+ */
+export function ensureVisualHook(angle: AnglePreview): AnglePreview {
+  if (angle.deliveryProfile !== "Visual-first") return angle;
+  if (angle.visualHook || angle.textHook) return angle;
+  const source = angle.threeBeatOutline[0] || angle.summary || angle.title;
+  return { ...angle, visualHook: `Opening 0-3s: ${source}`.trim() };
+}
+
+export function normalizeAngles(
+  raw: Record<string, unknown>,
+  fallback: { pillar?: string; contentType?: string } = {},
+): AnglePreview[] {
   const rows = Array.isArray(raw.angles) ? raw.angles : [];
-  return rows.slice(0, 5).map((item: any) => ({
+  const fallbackPillar = normalizePillar(fallback.pillar);
+  const fallbackType = normalizeContentType(fallback.contentType);
+  return rows.slice(0, 5).map((item: any) => ensureVisualHook({
     title: String(item.title || "Untitled angle").trim(),
     summary: String(item.summary || "").trim(),
     spokenHook: String(item.spokenHook || "").trim(),
@@ -18,6 +76,8 @@ export function normalizeAngles(raw: Record<string, unknown>): AnglePreview[] {
     whatNotToCopy: String(item.whatNotToCopy || "").trim(),
     deliveryProfile: ["Visual-first", "Operator-first", "Hybrid"].includes(item.deliveryProfile) ? item.deliveryProfile : "Hybrid",
     scriptEngine: ["Kallaway", "RPN", "Hybrid"].includes(item.scriptEngine) ? item.scriptEngine : "Kallaway",
+    pillar: normalizePillar(item.pillar) || fallbackPillar,
+    contentType: normalizeContentType(item.contentType) || fallbackType,
   }));
 }
 

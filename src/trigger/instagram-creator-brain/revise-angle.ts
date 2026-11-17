@@ -41,7 +41,7 @@ export const reviseInstagramAngle = task({
           0.6,
           { ledger, label: `minimax revise attempt ${attempt + 1}` },
         );
-        const [candidate] = normalizeAngles(raw);
+        const [candidate] = normalizeAngles(raw, { pillar: idea.pillar, contentType: idea.contentType });
         if (!candidate) throw new Error("MiniMax returned no usable revised angle");
         if (!reel.geminiAnalysis) {
           revised = candidate;

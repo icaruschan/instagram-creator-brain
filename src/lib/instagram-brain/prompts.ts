@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ACCOUNTS, PILLAR_DEFINITIONS, activeAccounts, type DeliveryProfile, type ScriptEngine } from "./config";
+import { ACCOUNTS, CONTENT_TYPES, PILLAR_DEFINITIONS, YUNA_PILLARS, activeAccounts, type DeliveryProfile, type ScriptEngine } from "./config";
 
 function loadScriptWriterV23(): string {
   const candidates = [
@@ -74,6 +74,8 @@ For every angle, identify the transferable viewer psychology and explicitly stat
 Treat the source's first three seconds, main movement, and payoff as protected creative expression. Do not transform them into a new costume or location.
 Propose three different story engines, not three settings for the same story.
 For each angle, explain in the premise or beats exactly what AI creates or enables. Do not propose an ordinary real-world walk, light change, or emotional scene merely branded as AI.
+Label each angle with its OWN pillar and contentType based on what that angle is (not the source Reel's labels). Pillars: ${YUNA_PILLARS.join(", ")}. Content types: ${CONTENT_TYPES.join(", ")}.
+Every angle needs a non-empty visualHook describing the exact 0-3s image or action; a Visual-first angle may leave spokenHook blank but never visualHook.
 
 Return JSON:
 {
@@ -88,7 +90,9 @@ Return JSON:
     "whyItWorks": "specific mechanism",
     "whatNotToCopy": "protected or distinctive source elements to avoid",
     "deliveryProfile": "Visual-first | Operator-first | Hybrid",
-    "scriptEngine": "Kallaway | RPN | Hybrid"
+    "scriptEngine": "Kallaway | RPN | Hybrid",
+    "pillar": "${YUNA_PILLARS.join(" | ")}",
+    "contentType": "${CONTENT_TYPES.join(" | ")}"
   }]
 }`;
 }
@@ -193,8 +197,9 @@ export function buildReviseAnglePrompt(input: {
 REVIEWER NOTES (follow these; if empty, make the angle sharper, more original and more clearly AI-driven):
 ${input.revisionNotes || "No notes given."}
 
-PILLAR: ${input.pillar || "unspecified"}
-CONTENT TYPE: ${input.contentType || "unspecified"}
+CURRENT PILLAR: ${input.pillar || "unspecified"}
+CURRENT CONTENT TYPE: ${input.contentType || "unspecified"}
+(Return the pillar and contentType that fit the revised angle; keep the current ones if they still fit. Always give a non-empty visualHook.)
 SOURCE: ${input.sourceTitle}
 
 CURRENT ANGLE:
@@ -217,7 +222,9 @@ Return JSON with exactly one angle in the same shape:
     "whyItWorks": "specific mechanism",
     "whatNotToCopy": "protected or distinctive source elements to avoid",
     "deliveryProfile": "Visual-first | Operator-first | Hybrid",
-    "scriptEngine": "Kallaway | RPN | Hybrid"
+    "scriptEngine": "Kallaway | RPN | Hybrid",
+    "pillar": "${YUNA_PILLARS.join(" | ")}",
+    "contentType": "${CONTENT_TYPES.join(" | ")}"
   }]
 }`;
 }

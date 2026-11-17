@@ -547,8 +547,9 @@ export async function createAngleIdeas(
         Status: { select: { name: "Angle Ready" } },
         // Yuna-only targeting: pre-assign the single active account so picking an angle is one click.
         Account: { select: { name: defaultIdeaAccount() } },
-        ...(reel.pillar ? { Pillar: { select: { name: reel.pillar } } } : {}),
-        ...(reel.contentType ? { "Content Type": { select: { name: reel.contentType } } } : {}),
+        // Each angle carries its own validated Pillar / Content Type; the source Reel's labels are only a fallback.
+        ...((angle.pillar || reel.pillar) ? { Pillar: { select: { name: angle.pillar || reel.pillar } } } : {}),
+        ...((angle.contentType || reel.contentType) ? { "Content Type": { select: { name: angle.contentType || reel.contentType } } } : {}),
         "Delivery Profile": { select: { name: angle.deliveryProfile } },
         "Script Engine": { select: { name: angle.scriptEngine } },
         "Angle Summary": { rich_text: rich(angle.summary) },
@@ -569,7 +570,7 @@ export async function createAngleIdeas(
         { object: "block", type: "heading_3", heading_3: { rich_text: rich("Four-layer hook") } },
         { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich(`Spoken: ${angle.spokenHook || "Intentionally minimal"}`) } },
         { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich(`Text: ${angle.textHook || "Intentionally minimal"}`) } },
-        { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich(`Visual: ${angle.visualHook}`) } },
+        { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich(`Visual: ${angle.visualHook || "Intentionally minimal"}`) } },
         { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: rich(`Audio: ${angle.audioHook}`) } },
       ] as any,
     });
@@ -695,6 +696,8 @@ export async function reviseIdeaAngle(
     properties: {
       Idea: { title: rich(revised.title) },
       Status: { select: { name: "Angle Ready" } },
+      ...(revised.pillar ? { Pillar: { select: { name: revised.pillar } } } : {}),
+      ...(revised.contentType ? { "Content Type": { select: { name: revised.contentType } } } : {}),
       "Delivery Profile": { select: { name: revised.deliveryProfile } },
       "Script Engine": { select: { name: revised.scriptEngine } },
       "Angle Summary": { rich_text: rich(revised.summary) },

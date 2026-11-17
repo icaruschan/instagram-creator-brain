@@ -65,5 +65,9 @@ export interface AnglePreview {
   whatNotToCopy: string;
   deliveryProfile: DeliveryProfile;
   scriptEngine: ScriptEngine;
+  /** Yuna pillar for this angle (validated; falls back to the source Reel's pillar only when missing/invalid). */
+  pillar?: string;
+  /** Content Type for this angle (validated; falls back to the source Reel's type only when missing/invalid). */
+  contentType?: string;
 }
 
