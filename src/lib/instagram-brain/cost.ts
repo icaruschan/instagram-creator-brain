@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { COST_ESTIMATES_USD, INSTAGRAM_BRAIN_CONFIG } from "./config";
+import { YOUTUBE_COST_ESTIMATES_USD } from "../youtube-outliers/config";
 
 export type CostKind =
   | "apify-reel-scrape"
@@ -8,7 +9,9 @@ export type CostKind =
   | "jev"
   | "gemini-analysis"
   | "openrouter-video-analysis"
-  | "minimax";
+  | "minimax"
+  | "apify-youtube-video"
+  | "youtube-data-api";
 
 export interface CostEntry {
   at: string;
@@ -51,6 +54,8 @@ export function estimateCost(kind: CostKind, units = 1): number {
     case "gemini-analysis": return COST_ESTIMATES_USD.geminiAnalysis * units;
     case "openrouter-video-analysis": return COST_ESTIMATES_USD.openrouterVideoAnalysis * units;
     case "minimax": return COST_ESTIMATES_USD.minimaxCall * units;
+    case "apify-youtube-video": return YOUTUBE_COST_ESTIMATES_USD.apifyYouTubeVideo * units;
+    case "youtube-data-api": return YOUTUBE_COST_ESTIMATES_USD.youtubeDataApiCall * units;
   }
 }
 

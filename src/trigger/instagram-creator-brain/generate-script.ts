@@ -1,7 +1,8 @@
 import { AbortTaskRunError, task } from "@trigger.dev/sdk/v3";
 import { generateJSONMiniMax } from "../../lib/minimax";
 import { buildScriptPrompt, buildScriptSystem } from "../../lib/instagram-brain/prompts";
-import { createProductionItem, findProductionByIdea, getIdea, getReel, setIdeaActionState } from "../../lib/instagram-brain/notion";
+import { createProductionItem, findProductionByIdea, getIdea, setIdeaActionState } from "../../lib/instagram-brain/notion";
+import { loadIdeaSource } from "../../lib/youtube-outliers/idea-source";
 import { normalizeScriptPackage } from "../../lib/instagram-brain/production-brief";
 import { resolveTargetAccount } from "../../lib/instagram-brain/config";
 import { actionLedger, publishCostSummary, rethrowNonRetryable } from "../../lib/instagram-brain/cost";
@@ -29,14 +30,13 @@ export const generateInstagramScript = task({
         // Account on hold / not chosen: a retry would fail the same way.
         throw new AbortTaskRunError((error as Error).message);
       }
-      if (!idea.sourceReelId) throw new Error("Selected angle is not linked to a source Reel");
       const existingProductionPageId = await findProductionByIdea(ideaPageId);
       if (existingProductionPageId) {
         await setIdeaActionState(ideaPageId, "Complete", "", true);
         return { ideaPageId, productionPageId: existingProductionPageId, alreadyExists: true };
       }
-      const reel = await getReel(idea.sourceReelId);
-      const sourceFacts = [reel.caption, reel.transcript, reel.geminiAnalysis].filter(Boolean).join("\n\n");
+      // Source Reel (as before) or, for YouTube-sourced ideas, the YouTube Outliers row.
+      const sourceFacts = (await loadIdeaSource(idea)).facts;
       const raw = await generateJSONMiniMax(
         buildScriptPrompt({
           account,

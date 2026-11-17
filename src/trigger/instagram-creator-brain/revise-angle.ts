@@ -1,7 +1,8 @@
 import { task } from "@trigger.dev/sdk/v3";
 import { generateJSONMiniMax } from "../../lib/minimax";
 import { ANGLE_STRATEGIST_SYSTEM, buildReviseAnglePrompt } from "../../lib/instagram-brain/prompts";
-import { getIdea, getReel, reviseIdeaAngle, setIdeaActionState } from "../../lib/instagram-brain/notion";
+import { getIdea, reviseIdeaAngle, setIdeaActionState } from "../../lib/instagram-brain/notion";
+import { loadIdeaSource } from "../../lib/youtube-outliers/idea-source";
 import { actionLedger, publishCostSummary, rethrowNonRetryable } from "../../lib/instagram-brain/cost";
 import type { AnglePreview } from "../../lib/instagram-brain/types";
 import { normalizeAngles, originalityResults } from "../../lib/instagram-brain/angles";
@@ -22,8 +23,9 @@ export const reviseInstagramAngle = task({
     const ledger = actionLedger("revise-angle");
     try {
       const idea = await getIdea(ideaPageId);
-      if (!idea.sourceReelId) throw new Error("This angle is not linked to a source Reel");
-      const reel = await getReel(idea.sourceReelId);
+      // Source Reel (as before) or the YouTube Outliers row for YouTube-sourced ideas.
+      const source = await loadIdeaSource(idea);
+      const reel = { title: source.title, geminiAnalysis: source.analysis };
       let feedback = "";
       let revised: AnglePreview | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
