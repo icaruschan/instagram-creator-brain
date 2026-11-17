@@ -341,7 +341,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
 }
 
 /**
- * Manual task until the user explicitly approves recurring scans.
+ * Manual trigger (e.g. a one-off full-bench scan). The daily 06:00 WAT scan lives in schedules.ts (approved 2026-11-17).
  * Retries are off: a retry would re-scrape (and re-pay for) everything, outside the run's spending cap.
  * Per-creator failures are already caught inside the run.
  */

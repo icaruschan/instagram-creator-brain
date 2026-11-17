@@ -75,7 +75,7 @@ export async function runInstagramActionRouter() {
   return { reels: reelActions.length, ideas: ideaActions.length, production: productionActions.length };
 }
 
-/** Manual task until the user explicitly approves recurring action polling. */
+/** Manual trigger. The 15-minute schedule lives in schedules.ts (approved 2026-11-17). */
 export const routeInstagramCreatorBrainActions = task({
   id: "instagram-brain-action-router",
   maxDuration: 900,
