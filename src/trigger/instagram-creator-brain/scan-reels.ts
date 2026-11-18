@@ -15,7 +15,7 @@ import {
   type StoredReel,
 } from "../../lib/instagram-brain/notion";
 import { planCandidateSlots, recheckReason, type RecheckReason, type SlotEntry } from "../../lib/instagram-brain/candidates";
-import { calculatePerformanceScore, engagementRate, median } from "../../lib/instagram-brain/scoring";
+import { calculatePerformanceScore, engagementRate, median, refreshedPriorityScore } from "../../lib/instagram-brain/scoring";
 import {
   candidateSkipReason,
   expectedViewsAtAge,
@@ -43,7 +43,8 @@ export interface ScanInstagramPayload {
 
 /** Estimated cost of one queued video analysis task (video analysis + one Jev value call). */
 export function estimatedAnalysisCost(): number {
-  return estimateVideoAnalysisCost() + estimateCost("jev");
+  // 2026-11-18: the source-value decision is Gemini + video (fit-decision), Jev fallback still reserved.
+  return estimateVideoAnalysisCost() + estimateCost("fit-decision") + estimateCost("jev");
 }
 
 /** Estimated worst-case cost of scanning one creator. */
@@ -78,6 +79,8 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   /** Who decided each fit check this scan (Gemini+video vs Jev text fallback), keyed "model mode". */
   const fitDecidedBy: Record<string, number> = {};
   let fitFallbacks = 0;
+  /** Analysed Reels whose Priority moved because their Performance was refreshed this scan. */
+  const priorityRefreshes: Array<{ shortcode: string; performance: [number, number]; priority: [number, number] }> = [];
   for (const creator of creators) {
     if (stoppedReason) {
       results.push({ creator: creator.handle, status: "skipped", reason: stoppedReason });
@@ -199,7 +202,12 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
         }
         const score = scoreFor(reel.metrics, reel.publishedAt, reel.pageId);
         if (!score) continue;
-        await updateReelScore(reel.pageId, score);
+        // Analysed Reels: Priority follows the refreshed Performance (stored fit/values, no model call).
+        const priority = refreshedPriorityScore(reel, score.score);
+        await updateReelScore(reel.pageId, score, priority);
+        if (priority != null && Math.abs(priority - reel.priorityScore) >= 0.05) {
+          priorityRefreshes.push({ shortcode: reel.shortcode, performance: [reel.performanceScore, score.score], priority: [reel.priorityScore, priority] });
+        }
         performanceByPage.set(reel.pageId, score.score);
       }
 
@@ -338,6 +346,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   console.log(`[cost] scan summary ${JSON.stringify(cost)}`);
   console.log(`[recency] scan totals ${JSON.stringify(recencyTotals)}`);
   console.log(`[fit] scan totals ${JSON.stringify({ decidedBy: fitDecidedBy, fallbacks: fitFallbacks })}`);
+  console.log(`[priority-refresh] ${JSON.stringify({ count: priorityRefreshes.length, topOpportunitiesMin: INSTAGRAM_BRAIN_CONFIG.topOpportunitiesMinPriority, rows: priorityRefreshes })}`);
   return {
     creators: creators.length,
     results,
@@ -345,6 +354,7 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
     analysisCutoff: { minPerformanceScore, candidates: candidates.length, belowCutoff },
     recency: recencyTotals,
     fitChecks: { decidedBy: fitDecidedBy, fallbacks: fitFallbacks },
+    priorityRefreshes,
     stoppedReason,
     cost,
   };

@@ -198,6 +198,14 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   fitUseVideo: !/^(false|0|no|off)$/i.test(String(process.env.IG_BRAIN_FIT_USE_VIDEO ?? "true").trim()),
   /** Timeout (ms) for one fit-model decision call. A/B median with video was ~1.4s; 60s leaves room. */
   fitTimeoutMs: envNumber("IG_BRAIN_FIT_TIMEOUT_MS", 60_000),
+  /**
+   * Post-analysis source-value decision in analyze-reel.ts (strategic fit + visual/workflow value + mode -> Priority).
+   * Fortune approved 2026-11-18: Gemini Decision 1 watching the 480p Reel video, Jev text (jevModel) as automatic
+   * fallback. Same timeout / video size limits as the fit gate. Rollback without redeploy:
+   * IG_BRAIN_ANALYSIS_FIT_MODEL=typesafe/jev-1.13. IG_BRAIN_ANALYSIS_FIT_USE_VIDEO=false sends text only.
+   */
+  analysisFitModel: process.env.IG_BRAIN_ANALYSIS_FIT_MODEL || "google/gemini-decision-1",
+  analysisFitUseVideo: !/^(false|0|no|off)$/i.test(String(process.env.IG_BRAIN_ANALYSIS_FIT_USE_VIDEO ?? "true").trim()),
   /** Video height (px) the fit check shrinks to before sending inline. */
   fitVideoHeight: envNumber("IG_BRAIN_FIT_VIDEO_HEIGHT", 480),
   /** Largest video (MB, after shrinking, before base64) sent to the fit model; bigger falls back to Jev text. */
@@ -241,9 +249,15 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   minPerformanceScoreForAnalysis: envNumber("IG_BRAIN_MIN_PERFORMANCE_FOR_ANALYSIS", 60),
   /**
    * Minimum Priority Score (0-100) an analysed Reel needs before MiniMax angles are generated.
-   * Default 60 (Top Opportunities shows >= 70). Tick "Manual Override" on the Reel to bypass.
+   * Default 60 (Top Opportunities shows >= 67). Tick "Manual Override" on the Reel to bypass.
    */
   minPriorityScoreForAngles: envNumber("IG_BRAIN_MIN_PRIORITY_FOR_ANGLES", 60),
+  /**
+   * Priority Score a Reel needs to show in the Notion "Top Opportunities" gallery (the filter lives in that Notion
+   * view, on the Instagram Creator Brain page; keep both in sync). 70 -> 67 by Fortune 2026-11-18, because the
+   * Gemini source-value decision scores ~3-4 points lower than Jev. Used for run output/logs only.
+   */
+  topOpportunitiesMinPriority: envNumber("IG_BRAIN_TOP_OPPORTUNITIES_MIN_PRIORITY", 67),
   /** Optional JSONL cost log path (best effort; Trigger's run output + metadata is the durable record). */
   costLogFile: process.env.IG_BRAIN_COST_LOG_FILE ?? ".tmp/ig-brain-cost-log.jsonl",
   priorityWeights: {

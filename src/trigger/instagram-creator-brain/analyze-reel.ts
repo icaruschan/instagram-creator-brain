@@ -1,17 +1,11 @@
 import { task } from "@trigger.dev/sdk/v3";
 import { analyzeReelVideo } from "../../lib/instagram-brain/video-analysis";
-import { buildSourceValueQuestions, runJevDecision } from "../../lib/instagram-brain/jev";
+import { runSourceValueDecision } from "../../lib/instagram-brain/fit-check";
 import { calculatePriorityScore } from "../../lib/instagram-brain/scoring";
 import { clearReelFailedState, getInstagramCreator, getReel, setReelActionState, updateReelIntelligence } from "../../lib/instagram-brain/notion";
 import { actionLedger, publishCostSummary, rethrowNonRetryable } from "../../lib/instagram-brain/cost";
 
 export interface AnalyzeReelPayload { reelPageId: string }
-
-const FIT_VALUES: Record<string, number> = { core: 100, supporting: 65, adjacent: 30, irrelevant: 0 };
-
-function expectedFit(probabilities: Record<string, number>): number {
-  return Math.round(Object.entries(probabilities).reduce((sum, [key, probability]) => sum + (FIT_VALUES[key] || 0) * probability, 0) * 10) / 10;
-}
 
 export const analyzeInstagramReel = task({
   id: "instagram-brain-analyze-reel",
@@ -54,41 +48,33 @@ export const analyzeInstagramReel = task({
         groundedVisualAnalysis: visual,
       }],
     };
-    const decisions = await runJevDecision(state, buildSourceValueQuestions(recordId), { ledger, label: `jev source value ${reel.shortcode}` });
-    const fitAnswer = decisions.answers[`${recordId}__strategic_fit`];
-    const visualAnswer = decisions.answers[`${recordId}__visual_pattern_value`];
-    const workflowAnswer = decisions.answers[`${recordId}__workflow_value`];
-    const modeAnswer = decisions.answers[`${recordId}__best_execution_mode`];
-    const fit = String(fitAnswer.choice || "irrelevant");
-    const fitScore = expectedFit(fitAnswer.probabilities || { [fit]: 1 });
-    const visualValue = Number(visualAnswer.noul || 0);
-    const workflowValue = Number(workflowAnswer.noul || 0);
+    // Source-value decision (fit + visual/workflow value + mode). Fortune 2026-11-18: Gemini Decision 1 watching the
+    // 480p Reel video, Jev text as automatic fallback; rollback IG_BRAIN_ANALYSIS_FIT_MODEL=typesafe/jev-1.13.
+    const decision = await runSourceValueDecision({ shortcode: reel.shortcode, recordId, videoUrl: reel.videoUrl, state }, ledger);
+    console.log(`[analysis-fit] ${JSON.stringify({ shortcode: reel.shortcode, fit: decision.fit, fitScore: decision.fitScore, visual: decision.visualValue, workflow: decision.workflowValue, ...decision.decidedBy })}`);
+    const fitScore = decision.fitScore;
+    const visualValue = decision.visualValue;
+    const workflowValue = decision.workflowValue;
     const priority = calculatePriorityScore({
       performanceScore: reel.performanceScore,
       strategicFitScore: fitScore,
       visualPatternValue: visualValue,
       workflowValue,
     });
-    const modeMap: Record<string, "Visual Storyteller" | "AI Creative Operator" | "Both" | "Neither"> = {
-      visual_storyteller: "Visual Storyteller",
-      creative_operator: "AI Creative Operator",
-      both: "Both",
-      neither: "Neither",
-    };
     await updateReelIntelligence({
       pageId: reelPageId,
       geminiAnalysis: JSON.stringify(visual, null, 2),
-      strategicFit: (fit.charAt(0).toUpperCase() + fit.slice(1)) as "Core" | "Supporting" | "Adjacent" | "Irrelevant",
+      strategicFit: decision.fit,
       strategicFitScore: fitScore,
       visualPatternValue: visualValue,
       workflowValue,
-      recommendedMode: modeMap[modeAnswer.choice] || "Neither",
-      jevConfidence: Number(fitAnswer.confidence || 0),
+      recommendedMode: decision.recommendedMode,
+      jevConfidence: decision.confidence,
       priorityScore: priority.priorityScore,
     });
     await clearReelFailedState(reelPageId);
     await publishCostSummary(ledger);
-    return { reelPageId, analysisProvider: analysisResult.provider, analysisModel: analysisResult.model, priorityScore: priority.priorityScore, visualValue, workflowValue, cost: ledger.summary() };
+    return { reelPageId, analysisProvider: analysisResult.provider, analysisModel: analysisResult.model, priorityScore: priority.priorityScore, fit: decision.fit, fitScore, visualValue, workflowValue, sourceValueDecidedBy: decision.decidedBy, cost: ledger.summary() };
   },
 });
 

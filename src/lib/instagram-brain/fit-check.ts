@@ -9,6 +9,7 @@ import { downloadVideoBytes } from "./gemini";
 import {
   STRATEGIC_FIT_CRITERIA,
   buildPillarQuestions,
+  buildSourceValueQuestions,
   readPillarAnswers,
   runJevDecision,
   type JevCallOptions,
@@ -196,5 +197,133 @@ export async function runFitCheck(input: FitCheckInput, ledger?: CostLedger, dep
   } catch (error) {
     if (isBudgetExceeded(error)) throw error;
     return jevText(`${cfg.fitModel} failed: ${(error as Error).message}`.slice(0, 300));
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Post-analysis source-value decision (analyze-reel.ts). Fortune approved 2026-11-18 ("Yes, switch the score
+// check to Gemini + video"): the same buildSourceValueQuestions() (strategic fit, visual pattern value,
+// workflow value, best execution mode) go to the analysis fit model (default Gemini Decision 1) with the Reel
+// video at 480p, Jev text as automatic fallback. Score mapping and calculatePriorityScore are unchanged.
+// Rollback without redeploy: IG_BRAIN_ANALYSIS_FIT_MODEL=typesafe/jev-1.13 (plain Jev text, as before).
+// ---------------------------------------------------------------------------------------------------------
+
+export type RecommendedMode = "Visual Storyteller" | "AI Creative Operator" | "Both" | "Neither";
+
+const MODE_MAP: Record<string, RecommendedMode> = {
+  visual_storyteller: "Visual Storyteller",
+  creative_operator: "AI Creative Operator",
+  both: "Both",
+  neither: "Neither",
+};
+
+export interface ParsedSourceValue {
+  fit: FitLabel;
+  fitScore: number;
+  confidence: number;
+  visualValue: number;
+  workflowValue: number;
+  recommendedMode: RecommendedMode;
+}
+
+export interface SourceValueResult extends ParsedSourceValue {
+  decidedBy: FitDecidedBy;
+}
+
+const unitValue = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
+};
+
+/**
+ * Read a source-value decisions response. strict=true (the primary model) throws on a missing/invalid fit label
+ * or missing visual/workflow values so the caller falls back to Jev; strict=false (Jev) keeps the old lenient
+ * defaults (irrelevant / 0 / Neither) exactly as analyze-reel.ts always did.
+ */
+export function parseSourceValueResponse(
+  response: Pick<JevDecisionResponse, "answers">,
+  recordId: string,
+  strict = true,
+): ParsedSourceValue {
+  const answers = response?.answers || {};
+  const fitAnswer = answers[`${recordId}__strategic_fit`] || {};
+  const visualAnswer = answers[`${recordId}__visual_pattern_value`] || {};
+  const workflowAnswer = answers[`${recordId}__workflow_value`] || {};
+  const modeAnswer = answers[`${recordId}__best_execution_mode`] || {};
+  let choice = String(fitAnswer.choice || "").toLowerCase();
+  if (!(choice in FIT_VALUES)) {
+    if (strict) throw new Error(`Source-value decision returned no valid strategic_fit choice (${JSON.stringify(fitAnswer.choice ?? null)})`);
+    choice = "irrelevant";
+  }
+  let visualValue = unitValue(visualAnswer.noul);
+  let workflowValue = unitValue(workflowAnswer.noul);
+  if (strict && (visualValue == null || workflowValue == null)) {
+    throw new Error(`Source-value decision returned no valid visual/workflow values (${JSON.stringify([visualAnswer.noul ?? null, workflowAnswer.noul ?? null])})`);
+  }
+  visualValue ??= Number(visualAnswer.noul || 0) || 0;
+  workflowValue ??= Number(workflowAnswer.noul || 0) || 0;
+  const probabilities = fitAnswer.probabilities && typeof fitAnswer.probabilities === "object" && Object.keys(fitAnswer.probabilities).length
+    ? fitAnswer.probabilities as Record<string, number>
+    : { [choice]: 1 };
+  return {
+    fit: (choice.charAt(0).toUpperCase() + choice.slice(1)) as FitLabel,
+    fitScore: expectedFit(probabilities),
+    confidence: Number(fitAnswer.confidence || 0),
+    visualValue,
+    workflowValue,
+    recommendedMode: MODE_MAP[String(modeAnswer.choice || "").toLowerCase()] || "Neither",
+  };
+}
+
+export interface SourceValueInput {
+  shortcode: string;
+  recordId: string;
+  videoUrl?: string;
+  state: Record<string, unknown>;
+}
+
+export interface SourceValueDeps extends FitVideoDeps {
+  decide?: FitCheckDeps["decide"];
+  config?: Partial<Pick<typeof INSTAGRAM_BRAIN_CONFIG, "analysisFitModel" | "analysisFitUseVideo" | "fitTimeoutMs" | "jevModel" | "fitVideoMaxMb">>;
+}
+
+export async function runSourceValueDecision(input: SourceValueInput, ledger?: CostLedger, deps: SourceValueDeps = {}): Promise<SourceValueResult> {
+  const cfg = { ...INSTAGRAM_BRAIN_CONFIG, ...(deps.config || {}) };
+  const decide = deps.decide || runJevDecision;
+  const questions = buildSourceValueQuestions(input.recordId);
+  const jevText = async (fallbackReason?: string): Promise<SourceValueResult> => {
+    const response = await decide(input.state, questions, { model: cfg.jevModel, ledger, label: `jev source value ${input.shortcode}${fallbackReason ? " (fallback)" : ""}` });
+    return { ...parseSourceValueResponse(response, input.recordId, false), decidedBy: { model: response.model || cfg.jevModel, mode: "text", ...(fallbackReason ? { fallbackReason } : {}) } };
+  };
+
+  // Analysis fit model is a Jev model (rollback): plain Jev text, exactly as before.
+  if (isJevModel(cfg.analysisFitModel)) {
+    const response = await decide(input.state, questions, { model: cfg.analysisFitModel, ledger, label: `jev source value ${input.shortcode}` });
+    return { ...parseSourceValueResponse(response, input.recordId, false), decidedBy: { model: response.model || cfg.analysisFitModel, mode: "text" } };
+  }
+
+  let state: unknown = input.state;
+  let videoBytes: number | undefined;
+  if (cfg.analysisFitUseVideo) {
+    try {
+      const video = await prepareFitVideo(input.videoUrl || "", deps, cfg.fitVideoMaxMb * 1024 * 1024);
+      state = [input.state, { type: "video_url", video_url: { url: video.dataUrl } }];
+      videoBytes = video.bytes;
+    } catch (error) {
+      return jevText(`video unavailable: ${(error as Error).message}`.slice(0, 300));
+    }
+  }
+  try {
+    const response = await decide(state, questions, {
+      model: cfg.analysisFitModel,
+      ledger,
+      label: `source value ${cfg.analysisFitModel}${videoBytes ? " +video" : ""} ${input.shortcode}`,
+      costKind: "fit-decision",
+      timeoutMs: cfg.fitTimeoutMs,
+    });
+    return { ...parseSourceValueResponse(response, input.recordId, true), decidedBy: { model: response.model || cfg.analysisFitModel, mode: videoBytes ? "video" : "text", ...(videoBytes ? { videoBytes } : {}) } };
+  } catch (error) {
+    if (isBudgetExceeded(error)) throw error;
+    return jevText(`${cfg.analysisFitModel} failed: ${(error as Error).message}`.slice(0, 300));
   }
 }

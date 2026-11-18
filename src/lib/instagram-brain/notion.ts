@@ -309,17 +309,18 @@ export async function getLatestReelSnapshot(
 export async function updateReelScore(
   pageId: string,
   score: { viewLift: number; engagementLift: number; velocityLift: number | null; score: number; mode: "static" | "velocity" },
+  /** Recomputed Priority Score for an analysed Reel (null/undefined = leave Priority as is). */
+  priorityScore?: number | null,
 ): Promise<void> {
-  await notion.pages.update({
-    page_id: pageId,
-    properties: {
-      "View Lift": { number: score.viewLift },
-      "Engagement Lift": { number: score.engagementLift },
-      "Velocity Lift": { number: score.velocityLift },
-      "Performance Score": { number: score.score },
-      "Score Mode": { select: { name: score.mode === "velocity" ? "Velocity" : "Static" } },
-    },
-  });
+  const properties: Record<string, any> = {
+    "View Lift": { number: score.viewLift },
+    "Engagement Lift": { number: score.engagementLift },
+    "Velocity Lift": { number: score.velocityLift },
+    "Performance Score": { number: score.score },
+    "Score Mode": { select: { name: score.mode === "velocity" ? "Velocity" : "Static" } },
+  };
+  if (priorityScore != null && Number.isFinite(priorityScore)) properties["Priority Score"] = { number: priorityScore };
+  await notion.pages.update({ page_id: pageId, properties });
 }
 
 export async function updateCreatorCheckpoint(

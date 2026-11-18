@@ -10,6 +10,8 @@
     "migrate:yuna-guardrails:dry": "tsx scripts/migrate-yuna-guardrails.ts",
     "migrate:yuna-guardrails": "tsx scripts/migrate-yuna-guardrails.ts --apply",
     "test:scoring": "tsx scripts/test-instagram-brain-scoring.ts",
+    "backfill:priority:dry": "tsx scripts/backfill-priority.ts",
+    "backfill:priority": "tsx scripts/backfill-priority.ts --apply",
     "migrate:notion": "tsx scripts/migrate-instagram-creator-brain.ts",
     "migrate:notion:dry": "tsx scripts/migrate-instagram-creator-brain.ts --dry-run",
     "verify:notion": "tsx scripts/verify-instagram-creator-brain.ts",

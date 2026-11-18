@@ -55,12 +55,13 @@ async function main() {
   assert.doesNotThrow(() => JSON.stringify(openSummary));
   const { actionLedger } = await import("../src/lib/instagram-brain/cost");
   assert.equal(actionLedger("angles", undefined).unlimited, true);
-  // Worst-case estimate for a full default scan (5 creators x 8 slots + 5 analyses), for the notes: ~$1.51
-  // (2026-11-18: +$0.005/slot padded estimate for the Gemini+video fit check, Jev fallback still reserved).
+  // Worst-case estimate for a full default scan (5 creators x 8 slots + 5 analyses), for the notes: ~$1.535
+  // (2026-11-18: +$0.005/slot padded estimate for the Gemini+video fit check, Jev fallback still reserved;
+  //  +$0.005/analysis for the Gemini+video source-value decision, Jev fallback still reserved).
   const perCreator = estimatedCreatorScanCost(INSTAGRAM_BRAIN_CONFIG.reelsPerCreator);
   assert.equal(Math.round(perCreator * 1000) / 1000, 0.286);
   const defaultScan = perCreator * INSTAGRAM_BRAIN_CONFIG.creatorsPerScan + estimatedAnalysisCost() * INSTAGRAM_BRAIN_CONFIG.deepAnalysisLimitPerRun;
-  assert.equal(Math.round(defaultScan * 100) / 100, 1.51);
+  assert.equal(Math.round(defaultScan * 1000) / 1000, 1.535);
   assert.equal(estimateCost("apify-reel-scrape", 30), 0.078);
   // Worst-case angle generation (3 MiniMax + 3 Jev) ≈ $0.093 estimated (no cap now).
   assert.equal(Math.round(3 * (estimateCost("minimax") + estimateCost("jev")) * 1000) / 1000, 0.093);

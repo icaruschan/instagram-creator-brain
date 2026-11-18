@@ -22,7 +22,8 @@ async function main() {
   assert.equal((INSTAGRAM_BRAIN_CONFIG as any).videoAnalysisTimeoutMs, undefined, "no video-analysis request timeout");
   assert.equal(INSTAGRAM_BRAIN_CONFIG.videoAnalysisFallback, "none");
   assert.equal(estimateVideoAnalysisCost(), estimateCost("openrouter-video-analysis"));
-  assert.ok(estimatedAnalysisCost() < 0.02, "Qwen analysis + Jev should estimate under $0.02");
+  // 2026-11-18: + padded Gemini+video source-value decision ($0.005; real ~$0.0006), Jev fallback still reserved.
+  assert.ok(estimatedAnalysisCost() < 0.025, "Qwen analysis + source-value decision (Gemini, Jev fallback) should estimate under $0.025");
 
   // Request shape follows OpenRouter's Chat Completions video docs, with the same prompt as Gemini.
   const context = buildAnalysisContext({ caption: "cap", transcript: "tr" });

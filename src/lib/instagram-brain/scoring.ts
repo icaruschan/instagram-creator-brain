@@ -102,6 +102,25 @@ export function calculatePriorityScore(
   };
 }
 
+/**
+ * Priority Score for an already-analysed Reel after its Performance Score was refreshed (Fortune 2026-11-18:
+ * "fix the stale Priority scores"). Uses the stored fit / visual / workflow values, so no model call.
+ * Returns null for rows that were never analysed (no Priority yet), which keep Priority empty.
+ */
+export function refreshedPriorityScore(
+  row: { priorityScore: number; strategicFitScore: number; visualPatternValue: number; workflowValue: number; geminiAnalysis?: string },
+  performanceScore: number,
+): number | null {
+  const analysed = row.priorityScore > 0 || Boolean(row.geminiAnalysis);
+  if (!analysed) return null;
+  return calculatePriorityScore({
+    performanceScore,
+    strategicFitScore: row.strategicFitScore,
+    visualPatternValue: row.visualPatternValue,
+    workflowValue: row.workflowValue,
+  }).priorityScore;
+}
+
 export function eligibleDeliveryProfiles(
   visualPatternValue: number,
   workflowValue: number,
