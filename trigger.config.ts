@@ -1,5 +1,5 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
-import { additionalFiles, additionalPackages } from "@trigger.dev/build/extensions/core";
+import { additionalFiles, additionalPackages, ffmpeg } from "@trigger.dev/build/extensions/core";
 
 export default defineConfig({
   project: "proj_xsktxkyadeapydcirmck",
@@ -16,6 +16,8 @@ export default defineConfig({
     extensions: [
       additionalFiles({ files: ["./src/data/scriptwriter-v2.3.md"] }),
       additionalPackages({ packages: ["proxy-agent"] }),
+      // Fit check shrinks Reel videos to 480p before sending them to Gemini Decision 1 (2026-11-18).
+      ffmpeg(),
     ],
   },
 });

@@ -158,6 +158,11 @@ export const COST_ESTIMATES_USD = {
    * The real figure comes from OpenRouter usage.cost and replaces this in the log.
    */
   openrouterVideoAnalysis: envNumber("IG_BRAIN_COST_OPENROUTER_VIDEO_ANALYSIS", 0.015),
+  /**
+   * Fit check with google/gemini-decision-1 + the Reel video (480p inline) via OpenRouter decisions.
+   * Measured $0.00055/Reel median in the 2026-11-18 A/B (26 Reels); padded ~10x. usage.cost replaces it in the log.
+   */
+  fitDecision: envNumber("IG_BRAIN_COST_FIT_DECISION", 0.005),
   /** MiniMax M3 via OpenRouter, one JSON generation call (angles / script / blueprint). */
   minimaxCall: envNumber("IG_BRAIN_COST_MINIMAX_CALL", 0.03),
 } as const;
@@ -184,6 +189,19 @@ export const INSTAGRAM_BRAIN_CONFIG = {
   maxInlineVideoMb: envNumber("VIDEO_ANALYSIS_MAX_INLINE_MB", 40),
   /** Attempts per provider for transient errors (HTTP 429 / 503), with backoff. */
   videoAnalysisMaxAttempts: envNumber("VIDEO_ANALYSIS_MAX_ATTEMPTS", 3),
+  /**
+   * Fit check (the scan's Core/Supporting gate). Fortune approved 2026-11-18: Gemini Decision 1 watching the
+   * Reel video, with Jev text (jevModel) as automatic fallback when the video can't be fetched/shrunk, is too
+   * large, or the Gemini call errors/times out. IG_BRAIN_FIT_USE_VIDEO=false sends text only to the fit model.
+   */
+  fitModel: process.env.IG_BRAIN_FIT_MODEL || "google/gemini-decision-1",
+  fitUseVideo: !/^(false|0|no|off)$/i.test(String(process.env.IG_BRAIN_FIT_USE_VIDEO ?? "true").trim()),
+  /** Timeout (ms) for one fit-model decision call. A/B median with video was ~1.4s; 60s leaves room. */
+  fitTimeoutMs: envNumber("IG_BRAIN_FIT_TIMEOUT_MS", 60_000),
+  /** Video height (px) the fit check shrinks to before sending inline. */
+  fitVideoHeight: envNumber("IG_BRAIN_FIT_VIDEO_HEIGHT", 480),
+  /** Largest video (MB, after shrinking, before base64) sent to the fit model; bigger falls back to Jev text. */
+  fitVideoMaxMb: envNumber("IG_BRAIN_FIT_VIDEO_MAX_MB", 8),
   /**
    * Candidate slots per creator per scan (fit check, then the analysis gate). Shared between new Reels and
    * rechecks of existing rows; see lib/instagram-brain/candidates.ts. Default 8 (Fortune, Nov 12).

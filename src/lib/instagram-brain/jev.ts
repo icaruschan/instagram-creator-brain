@@ -7,7 +7,7 @@ import {
   type ContentType,
   type YunaPillar,
 } from "./config";
-import { estimateCost, type CostLedger } from "./cost";
+import { estimateCost, type CostKind, type CostLedger } from "./cost";
 
 dotenv.config({ override: true });
 
@@ -42,9 +42,14 @@ export interface JevCallOptions {
   model?: string;
   ledger?: CostLedger;
   label?: string;
+  /** Ledger kind for this call (default "jev"; the Gemini fit check uses "fit-decision"). */
+  costKind?: CostKind;
+  /** Request timeout in ms (default 30s). */
+  timeoutMs?: number;
 }
 
 export async function runJevDecision(
+  /** Text/JSON state, or an array mixing it with media parts (image_url / video_url) for multimodal models. */
   state: string | Record<string, unknown> | unknown[],
   questions: Record<string, JevQuestion>,
   options: JevCallOptions = {},
@@ -53,11 +58,13 @@ export async function runJevDecision(
   const label = options.label || "jev decision";
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is required for Jev decisions");
-  const estimate = estimateCost("jev");
+  const kind = options.costKind || "jev";
+  const estimate = estimateCost(kind);
   options.ledger?.ensure(estimate, label);
 
+  const timeoutMs = options.timeoutMs ?? 30_000;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
       method: "POST",
@@ -73,11 +80,14 @@ export async function runJevDecision(
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Jev decision failed (${response.status}): ${text.slice(0, 1000)}`);
+      throw new Error(`Decision call failed (${model}, ${response.status}): ${text.slice(0, 1000)}`);
     }
     const parsed = JSON.parse(text) as JevDecisionResponse;
-    options.ledger?.record("jev", label, estimate, parsed.usage?.cost);
+    options.ledger?.record(kind, label, estimate, parsed.usage?.cost);
     return parsed;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`Decision call timed out after ${timeoutMs}ms (${model})`);
+    throw error;
   } finally {
     clearTimeout(timer);
   }

@@ -50,6 +50,8 @@ export function estimatedAnalysisCost(): number {
 export function estimatedCreatorScanCost(reelsPerCreator: number): number {
   return estimateCost("apify-reel-scrape", reelScrapeResultsLimit(reelsPerCreator))
     + estimateCost("apify-transcript", reelsPerCreator)
+    + estimateCost("fit-decision", reelsPerCreator)
+    // Jev text fallback when the video fit check can't run.
     + estimateCost("jev", reelsPerCreator);
 }
 
@@ -73,6 +75,9 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   const results: Array<Record<string, unknown>> = [];
   const candidates: Array<{ reelPageId: string; performanceScore: number; fitScore: number }> = [];
   const recencyTotals = { windowDays, skippedPinned: 0, skippedTooOld: 0, skippedNoDate: 0, skippedBlocked: 0 };
+  /** Who decided each fit check this scan (Gemini+video vs Jev text fallback), keyed "model mode". */
+  const fitDecidedBy: Record<string, number> = {};
+  let fitFallbacks = 0;
   for (const creator of creators) {
     if (stoppedReason) {
       results.push({ creator: creator.handle, status: "skipped", reason: stoppedReason });
@@ -273,6 +278,9 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
           continue;
         }
         const qualification = await runQualifyInstagramReel({ reelPageId: pick.pageId }, ledger);
+        const decidedKey = `${qualification.decidedBy.model} ${qualification.decidedBy.mode}`;
+        fitDecidedBy[decidedKey] = (fitDecidedBy[decidedKey] || 0) + 1;
+        if (qualification.decidedBy.fallbackReason) fitFallbacks += 1;
         if (qualification.fit === "Core" || qualification.fit === "Supporting") {
           const stored = await getReel(pick.pageId);
           candidates.push({ reelPageId: pick.pageId, performanceScore: stored.performanceScore, fitScore: qualification.score });
@@ -329,12 +337,14 @@ export async function runInstagramScan(payload: ScanInstagramPayload = {}) {
   await publishCostSummary(ledger);
   console.log(`[cost] scan summary ${JSON.stringify(cost)}`);
   console.log(`[recency] scan totals ${JSON.stringify(recencyTotals)}`);
+  console.log(`[fit] scan totals ${JSON.stringify({ decidedBy: fitDecidedBy, fallbacks: fitFallbacks })}`);
   return {
     creators: creators.length,
     results,
     visualAnalysesQueued: queued.length,
     analysisCutoff: { minPerformanceScore, candidates: candidates.length, belowCutoff },
     recency: recencyTotals,
+    fitChecks: { decidedBy: fitDecidedBy, fallbacks: fitFallbacks },
     stoppedReason,
     cost,
   };
