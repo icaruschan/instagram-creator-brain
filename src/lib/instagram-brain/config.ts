@@ -145,6 +145,11 @@ export function resolveTargetAccount(
 export const COST_ESTIMATES_USD = {
   /** apify/instagram-reel-scraper: $2.60 / 1,000 results on the Free plan (per result). */
   apifyReelResult: envNumber("IG_BRAIN_COST_APIFY_REEL_RESULT", 0.0026),
+  /**
+   * One-Reel re-scrape to refresh an expired Video URL (apify/instagram-reel-scraper with the Reel URL, 1 result).
+   * 1 result = $0.0026 on the Free plan; padded for any per-run start event. Apify's usageTotalUsd replaces it when higher.
+   */
+  apifyReelRefresh: envNumber("IG_BRAIN_COST_APIFY_REEL_REFRESH", 0.005),
   /** apple_yang/instagram-transcripts-scraper: $0.001/result + audio-to-text + enhanced crawl (per reel, padded). */
   apifyTranscript: envNumber("IG_BRAIN_COST_APIFY_TRANSCRIPT", 0.02),
   /** typesafe/jev-1.13 decision call via OpenRouter. Measured ~$0.00001/decision in Sept tests; padded 100x. */

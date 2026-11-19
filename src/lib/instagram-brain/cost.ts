@@ -5,6 +5,7 @@ import { COST_ESTIMATES_USD, INSTAGRAM_BRAIN_CONFIG } from "./config";
 export type CostKind =
   | "apify-reel-scrape"
   | "apify-transcript"
+  | "apify-reel-refresh"
   | "jev"
   | "fit-decision"
   | "gemini-analysis"
@@ -48,6 +49,7 @@ export function estimateCost(kind: CostKind, units = 1): number {
   switch (kind) {
     case "apify-reel-scrape": return COST_ESTIMATES_USD.apifyReelResult * units;
     case "apify-transcript": return COST_ESTIMATES_USD.apifyTranscript * units;
+    case "apify-reel-refresh": return COST_ESTIMATES_USD.apifyReelRefresh * units;
     case "jev": return COST_ESTIMATES_USD.jevCall * units;
     case "fit-decision": return COST_ESTIMATES_USD.fitDecision * units;
     case "gemini-analysis": return COST_ESTIMATES_USD.geminiAnalysis * units;

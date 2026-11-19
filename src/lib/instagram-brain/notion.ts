@@ -334,6 +334,13 @@ export async function updateCreatorCheckpoint(
   if (Object.keys(properties).length > 0) await notion.pages.update({ page_id: creatorPageId, properties });
 }
 
+/** Save refreshed media links (auto re-fetch of an expired Video URL, 2026-11-20). */
+export async function updateReelMedia(pageId: string, media: { videoUrl: string; coverUrl?: string }): Promise<void> {
+  const properties: Record<string, any> = { "Video URL": { url: media.videoUrl } };
+  if (media.coverUrl) properties["Cover URL"] = { url: media.coverUrl };
+  await notion.pages.update({ page_id: pageId, properties });
+}
+
 export async function getReel(pageId: string): Promise<StoredReel> {
   requireIds();
   const page: any = await notion.pages.retrieve({ page_id: pageId });

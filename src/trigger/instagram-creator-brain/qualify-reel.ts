@@ -2,6 +2,7 @@ import { task } from "@trigger.dev/sdk/v3";
 import { getInstagramCreator, getReel, updateReelStrategicFit } from "../../lib/instagram-brain/notion";
 import { buildFitState, runFitCheck } from "../../lib/instagram-brain/fit-check";
 import { actionLedger, publishCostSummary, type CostLedger } from "../../lib/instagram-brain/cost";
+import { createReelVideoRefresher } from "../../lib/instagram-brain/video-refresh";
 
 export interface QualifyReelPayload { reelPageId: string }
 
@@ -19,7 +20,16 @@ export async function runQualifyInstagramReel({ reelPageId }: QualifyReelPayload
       caption: reel.caption,
       transcript: reel.transcript,
     });
-    const result = await runFitCheck({ shortcode: reel.shortcode, videoUrl: reel.videoUrl, state }, ledger);
+    // Auto re-fetch (2026-11-20): refresh an expired stored link once before/while preparing the fit video.
+    // A failed refresh keeps the old behaviour (Jev text fallback).
+    const refresher = await createReelVideoRefresher(
+      { pageId: reelPageId, shortcode: reel.shortcode, url: reel.url, videoUrl: reel.videoUrl },
+      ledger,
+    );
+    await refresher.ensureFresh();
+    const result = await runFitCheck({ shortcode: reel.shortcode, videoUrl: refresher.videoUrl, state }, ledger, {
+      refreshVideoUrl: async (error) => (await refresher.refreshAfterError(error)) ? refresher.videoUrl : null,
+    });
     const label = result.fit;
     console.log(`[fit] ${JSON.stringify({ shortcode: reel.shortcode, fit: label, score: result.score, ...result.decidedBy })}`);
     await updateReelStrategicFit({
@@ -30,7 +40,7 @@ export async function runQualifyInstagramReel({ reelPageId }: QualifyReelPayload
       pillar: label === "Irrelevant" ? null : result.pillar,
       contentType: label === "Irrelevant" ? null : result.contentType,
     });
-    return { reelPageId, fit: label, score: result.score, pillar: result.pillar, contentType: result.contentType, decidedBy: result.decidedBy };
+    return { reelPageId, fit: label, score: result.score, pillar: result.pillar, contentType: result.contentType, decidedBy: result.decidedBy, videoRefresh: refresher.outcome };
 }
 
 export const qualifyInstagramReel = task({

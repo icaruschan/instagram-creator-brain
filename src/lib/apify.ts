@@ -171,6 +171,43 @@ export async function scrapeInstagramReels(
   return { all, recent: all.slice(0, 12), unseenEligible: eligible, trialReels, recency };
 }
 
+/**
+ * Re-scrape ONE Reel by its Instagram URL to get a fresh (signed, expiring) video + cover link.
+ * Used by the auto re-fetch when a stored Video URL has expired (Fortune approved 2026-11-20). Costed as "apify-reel-refresh".
+ */
+export async function fetchSingleReelMedia(
+  reelUrl: string,
+  expectedShortcode: string,
+  ledger?: CostLedger,
+): Promise<{ videoUrl: string; coverUrl: string }> {
+  const estimate = estimateCost("apify-reel-refresh");
+  const label = `reel link refresh ${expectedShortcode}`;
+  ledger?.ensure(estimate, label);
+  const items = await withApify(async (client) => {
+    const run: any = await client.actor("apify/instagram-reel-scraper").call({
+      // The actor documents reel URLs (/reel/<code>/) as direct input; stored rows use /p/<code>/.
+      username: [/^[A-Za-z0-9_-]+$/.test(expectedShortcode) ? `https://www.instagram.com/reel/${expectedShortcode}/` : reelUrl],
+      resultsLimit: 1,
+      // Never filter here: we already know this exact Reel and only want its media links.
+      skipTrialReels: false,
+    });
+    const { items: rows } = await client.dataset(run.defaultDatasetId).listItems();
+    const reported = Number(run?.usageTotalUsd);
+    const byResults = estimateCost("apify-reel-scrape", Math.max(1, (rows || []).length));
+    ledger?.record("apify-reel-refresh", `${label} (${(rows || []).length} results)`, estimate,
+      Math.max(byResults, Number.isFinite(reported) ? reported : 0));
+    return (rows || []) as any[];
+  });
+  const match = items.find((item) => shortcode(item) === expectedShortcode)
+    || items.find((item) => String(item.url || item.inputUrl || "").includes(expectedShortcode))
+    || (items.length === 1 ? items[0] : undefined);
+  if (!match) throw new Error(`re-fetch found no result for ${expectedShortcode}`);
+  if (match.error) throw new Error(`re-fetch error for ${expectedShortcode}: ${String(match.errorDescription || match.error).slice(0, 200)}`);
+  const normalized = normalizeReel(match, String(match.ownerUsername || ""));
+  if (!normalized.videoUrl) throw new Error(`re-fetch returned no video URL for ${expectedShortcode}`);
+  return { videoUrl: normalized.videoUrl, coverUrl: normalized.coverUrl };
+}
+
 /** Transcripts for the Reels that won a candidate slot (3 at a time). Returns shortcode -> transcript. */
 export async function fetchReelTranscripts(
   reels: Array<{ id: string; url: string }>,

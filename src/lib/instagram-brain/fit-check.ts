@@ -107,6 +107,22 @@ export async function shrinkVideo(bytes: Uint8Array, height = INSTAGRAM_BRAIN_CO
 export interface FitVideoDeps {
   download?: (url: string) => Promise<Uint8Array>;
   shrink?: (bytes: Uint8Array) => Promise<Uint8Array>;
+  /**
+   * Auto re-fetch hook (2026-11-20): called once when the video can't be prepared. Return a fresh Video URL to
+   * try again, or null to fall back to Jev text as before. See lib/instagram-brain/video-refresh.ts.
+   */
+  refreshVideoUrl?: (error: unknown) => Promise<string | null>;
+}
+
+/** prepareFitVideo, with one retry on a fresh link when the refresh hook provides one. */
+export async function prepareFitVideoWithRefresh(videoUrl: string, deps: FitVideoDeps, maxBytes: number): Promise<PreparedVideo> {
+  try {
+    return await prepareFitVideo(videoUrl, deps, maxBytes);
+  } catch (error) {
+    const fresh = deps.refreshVideoUrl ? await deps.refreshVideoUrl(error) : null;
+    if (!fresh) throw error;
+    return prepareFitVideo(fresh, deps, maxBytes);
+  }
 }
 
 /** Download + shrink the Reel video for the fit model. Throws (-> Jev text fallback) when it can't. */
@@ -178,7 +194,7 @@ export async function runFitCheck(input: FitCheckInput, ledger?: CostLedger, dep
   let videoBytes: number | undefined;
   if (cfg.fitUseVideo) {
     try {
-      const video = await prepareFitVideo(input.videoUrl || "", deps, cfg.fitVideoMaxMb * 1024 * 1024);
+      const video = await prepareFitVideoWithRefresh(input.videoUrl || "", deps, cfg.fitVideoMaxMb * 1024 * 1024);
       state = [input.state, { type: "video_url", video_url: { url: video.dataUrl } }];
       videoBytes = video.bytes;
     } catch (error) {
@@ -306,7 +322,7 @@ export async function runSourceValueDecision(input: SourceValueInput, ledger?: C
   let videoBytes: number | undefined;
   if (cfg.analysisFitUseVideo) {
     try {
-      const video = await prepareFitVideo(input.videoUrl || "", deps, cfg.fitVideoMaxMb * 1024 * 1024);
+      const video = await prepareFitVideoWithRefresh(input.videoUrl || "", deps, cfg.fitVideoMaxMb * 1024 * 1024);
       state = [input.state, { type: "video_url", video_url: { url: video.dataUrl } }];
       videoBytes = video.bytes;
     } catch (error) {
